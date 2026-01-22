@@ -22,6 +22,10 @@ endif::[]
 A tool for creating lightweight containerized views of your computer for safely
 running semi-trusted programs and selectively managing their output.
 
+This fork by Alex Sanchez-Stern includes patch mode for accepting and rejecting
+hunks, a la the `-p` flag to various git commands. It is heavily clauded, use
+at your own risk.
+
 == Description
 
 The `sandbox` tool creates lightweight containerized copy-on-write views of your
@@ -207,6 +211,9 @@ Load config files from the given path. Can be specified multiple times.
 
 `--ignored`::
 Show files that would normally be filtered out by ignore rules.
+
+`-p, --patch`::
+Interactively accept or reject changes by hunk
 
 `-h, --help`::
 Print help
