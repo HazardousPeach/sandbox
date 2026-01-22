@@ -24,6 +24,7 @@ pub enum InteractiveCommand {
     Quit,     // q - quit (apply selections so far)
     All,      // a - accept/reject all remaining hunks in file
     Done,     // d - done with file, skip remaining hunks
+    Edit,     // e - manually edit this hunk
     Split,    // s - split hunk (if possible)
     Help,     // ? - show help
     NextFile, // j - skip to next file
@@ -38,6 +39,7 @@ impl InteractiveCommand {
             'q' | 'Q' => Some(Self::Quit),
             'a' | 'A' => Some(Self::All),
             'd' | 'D' => Some(Self::Done),
+            'e' | 'E' => Some(Self::Edit),
             's' | 'S' => Some(Self::Split),
             '?' | 'h' | 'H' => Some(Self::Help),
             'j' | 'J' => Some(Self::NextFile),
@@ -312,12 +314,12 @@ fn run_interactive_session(
             let can_split = hunk.can_split();
             if can_split {
                 eprint!(
-                    "{} this hunk? [y,n,q,a,d,s,j,k,?] ",
+                    "{} this hunk? [y,n,q,a,d,e,s,j,k,?] ",
                     action.to_uppercase().yellow()
                 );
             } else {
                 eprint!(
-                    "{} this hunk? [y,n,q,a,d,j,k,?] ",
+                    "{} this hunk? [y,n,q,a,d,e,j,k,?] ",
                     action.to_uppercase().yellow()
                 );
             }
@@ -352,6 +354,25 @@ fn run_interactive_session(
                 Some(InteractiveCommand::Done) => {
                     // Skip remaining hunks in this file
                     break;
+                }
+                Some(InteractiveCommand::Edit) => {
+                    match edit_hunk(hunk, &file_hunks.path) {
+                        Ok(Some(edited_hunk)) => {
+                            // Replace the current hunk with the edited version
+                            hunks[hunk_idx] = edited_hunk;
+                            // Re-display the edited hunk and ask again
+                            continue;
+                        }
+                        Ok(None) => {
+                            // User cancelled or no changes
+                            eprintln!("Edit cancelled or no changes made");
+                            continue;
+                        }
+                        Err(e) => {
+                            eprintln!("Error editing hunk: {}", e);
+                            continue;
+                        }
+                    }
                 }
                 Some(InteractiveCommand::Split) => {
                     if can_split && let Some(split_hunks) = hunk.split() {
@@ -413,6 +434,214 @@ fn read_command() -> Result<Option<InteractiveCommand>> {
         .and_then(InteractiveCommand::from_char))
 }
 
+/// Edit a hunk using the user's preferred editor
+fn edit_hunk(
+    hunk: &crate::sandbox::changes::DiffHunk,
+    file_path: &Path,
+) -> Result<Option<crate::sandbox::changes::DiffHunk>> {
+    use crate::sandbox::changes::hunk::HunkLine;
+    use std::process::Command;
+
+    // Create a temporary file with the hunk content
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir
+        .join(format!("sandbox-hunk-edit-{}.patch", uuid::Uuid::new_v4()));
+
+    // Write the hunk to the temp file with instructions
+    let mut content = String::new();
+    content.push_str(&format!("# Editing hunk for: {}\n", file_path.display()));
+    content.push_str("# \n");
+    content.push_str("# Instructions:\n");
+    content.push_str(
+        "#   - Lines starting with '-' will be removed from the original\n",
+    );
+    content.push_str("#   - Lines starting with '+' will be added\n");
+    content.push_str(
+        "#   - Lines starting with ' ' (space) are context (unchanged)\n",
+    );
+    content.push_str(
+        "#   - Lines starting with '#' are comments and will be ignored\n",
+    );
+    content.push_str(
+        "#   - To cancel, delete all non-comment lines or leave unchanged\n",
+    );
+    content.push_str("# \n");
+    content.push_str(&format!("# Original header: {}\n", hunk.header));
+    content.push_str("#\n");
+
+    // Write the hunk lines
+    for line in &hunk.lines {
+        match line {
+            HunkLine::Context(s) => {
+                content.push(' ');
+                content.push_str(s);
+                content.push('\n');
+            }
+            HunkLine::Added(s) => {
+                content.push('+');
+                content.push_str(s);
+                content.push('\n');
+            }
+            HunkLine::Removed(s) => {
+                content.push('-');
+                content.push_str(s);
+                content.push('\n');
+            }
+        }
+    }
+
+    // Write to temp file
+    fs::write(&temp_file, &content)?;
+
+    // Get the editor command
+    let editor = get_editor();
+
+    // Open the editor
+    let status = Command::new(&editor)
+        .arg(&temp_file)
+        .status()
+        .context(format!("Failed to open editor: {}", editor))?;
+
+    if !status.success() {
+        // Clean up temp file
+        let _ = fs::remove_file(&temp_file);
+        return Ok(None);
+    }
+
+    // Read the edited content
+    let edited_content = fs::read_to_string(&temp_file)?;
+
+    // Clean up temp file
+    let _ = fs::remove_file(&temp_file);
+
+    // Parse the edited content
+    parse_edited_hunk(&edited_content, hunk)
+}
+
+/// Get the user's preferred editor
+fn get_editor() -> String {
+    // Check VISUAL first, then EDITOR, then fall back to common editors
+    if let Ok(editor) = std::env::var("VISUAL") {
+        if !editor.is_empty() {
+            return editor;
+        }
+    }
+
+    if let Ok(editor) = std::env::var("EDITOR") {
+        if !editor.is_empty() {
+            return editor;
+        }
+    }
+
+    // Try to find a common editor
+    for editor in ["nano", "vim", "vi", "emacs"] {
+        if std::process::Command::new("which")
+            .arg(editor)
+            .output()
+            .is_ok_and(|o| o.status.success())
+        {
+            return editor.to_string();
+        }
+    }
+
+    // Last resort
+    "vi".to_string()
+}
+
+/// Parse edited hunk content back into a DiffHunk
+fn parse_edited_hunk(
+    content: &str,
+    original: &crate::sandbox::changes::DiffHunk,
+) -> Result<Option<crate::sandbox::changes::DiffHunk>> {
+    use crate::sandbox::changes::hunk::{DiffHunk, HunkLine};
+
+    let mut lines: Vec<HunkLine> = Vec::new();
+    let mut has_changes = false;
+
+    for line in content.lines() {
+        // Skip comments
+        if line.starts_with('#') {
+            continue;
+        }
+
+        // Empty lines in the diff should be treated as context
+        if line.is_empty() {
+            lines.push(HunkLine::Context(String::new()));
+            continue;
+        }
+
+        let first_char = line.chars().next().unwrap_or(' ');
+        let rest = if line.len() > 1 { &line[1..] } else { "" };
+
+        match first_char {
+            ' ' => {
+                lines.push(HunkLine::Context(rest.to_string()));
+            }
+            '+' => {
+                lines.push(HunkLine::Added(rest.to_string()));
+                has_changes = true;
+            }
+            '-' => {
+                lines.push(HunkLine::Removed(rest.to_string()));
+                has_changes = true;
+            }
+            _ => {
+                // Treat unrecognized prefix as context
+                lines.push(HunkLine::Context(line.to_string()));
+            }
+        }
+    }
+
+    // If no lines or no changes, return None
+    if lines.is_empty() || !has_changes {
+        return Ok(None);
+    }
+
+    // Check if the content is unchanged
+    if lines.len() == original.lines.len() {
+        let unchanged =
+            lines.iter().zip(original.lines.iter()).all(|(new, old)| {
+                match (new, old) {
+                    (HunkLine::Context(a), HunkLine::Context(b)) => a == b,
+                    (HunkLine::Added(a), HunkLine::Added(b)) => a == b,
+                    (HunkLine::Removed(a), HunkLine::Removed(b)) => a == b,
+                    _ => false,
+                }
+            });
+
+        if unchanged {
+            return Ok(None);
+        }
+    }
+
+    // Calculate new ranges
+    let original_count = lines
+        .iter()
+        .filter(|l| !matches!(l, HunkLine::Added(_)))
+        .count();
+    let new_count = lines
+        .iter()
+        .filter(|l| !matches!(l, HunkLine::Removed(_)))
+        .count();
+
+    // Create the new hunk with updated header
+    let header = format!(
+        "@@ -{},{} +{},{} @@",
+        original.original_range.0,
+        original_count,
+        original.new_range.0,
+        new_count
+    );
+
+    Ok(Some(DiffHunk {
+        index: original.index,
+        header,
+        original_range: (original.original_range.0, original_count),
+        new_range: (original.new_range.0, new_count),
+        lines,
+    }))
+}
+
 /// Print help for interactive mode
 fn print_help(action: &str) {
     eprintln!("\nInteractive {} commands:", action);
@@ -424,6 +653,7 @@ fn print_help(action: &str) {
         action
     );
     eprintln!("  d - done with this file; skip remaining hunks");
+    eprintln!("  e - manually edit this hunk");
     eprintln!("  s - split this hunk into smaller hunks (if possible)");
     eprintln!("  j - skip to next file");
     eprintln!("  k - go back to previous file");
@@ -1013,4 +1243,157 @@ fn write_remaining_to_upper(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sandbox::changes::hunk::{DiffHunk, HunkLine};
+
+    #[test]
+    fn test_parse_edited_hunk_basic() {
+        let original = DiffHunk {
+            index: 0,
+            header: "@@ -1,3 +1,3 @@".to_string(),
+            original_range: (1, 3),
+            new_range: (1, 3),
+            lines: vec![
+                HunkLine::Context("line1".to_string()),
+                HunkLine::Removed("old".to_string()),
+                HunkLine::Added("new".to_string()),
+                HunkLine::Context("line3".to_string()),
+            ],
+        };
+
+        let edited = " line1\n-old\n+modified\n line3\n";
+        let result = parse_edited_hunk(edited, &original).unwrap();
+
+        assert!(result.is_some());
+        let hunk = result.unwrap();
+        assert!(hunk
+            .lines
+            .iter()
+            .any(|l| matches!(l, HunkLine::Added(s) if s == "modified")));
+    }
+
+    #[test]
+    fn test_parse_edited_hunk_unchanged() {
+        let original = DiffHunk {
+            index: 0,
+            header: "@@ -1,3 +1,3 @@".to_string(),
+            original_range: (1, 3),
+            new_range: (1, 3),
+            lines: vec![
+                HunkLine::Context("line1".to_string()),
+                HunkLine::Removed("old".to_string()),
+                HunkLine::Added("new".to_string()),
+                HunkLine::Context("line3".to_string()),
+            ],
+        };
+
+        // Exact same content as original
+        let edited = " line1\n-old\n+new\n line3\n";
+        let result = parse_edited_hunk(edited, &original).unwrap();
+
+        assert!(result.is_none(), "Should return None for unchanged hunk");
+    }
+
+    #[test]
+    fn test_parse_edited_hunk_with_comments() {
+        let original = DiffHunk {
+            index: 0,
+            header: "@@ -1,2 +1,2 @@".to_string(),
+            original_range: (1, 2),
+            new_range: (1, 2),
+            lines: vec![
+                HunkLine::Removed("old".to_string()),
+                HunkLine::Added("new".to_string()),
+            ],
+        };
+
+        let edited = "# This is a comment\n# Another comment\n-old\n+different\n";
+        let result = parse_edited_hunk(edited, &original).unwrap();
+
+        assert!(result.is_some());
+        let hunk = result.unwrap();
+        // Should only have 2 lines (comments ignored)
+        assert_eq!(hunk.lines.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_edited_hunk_empty() {
+        let original = DiffHunk {
+            index: 0,
+            header: "@@ -1,2 +1,2 @@".to_string(),
+            original_range: (1, 2),
+            new_range: (1, 2),
+            lines: vec![
+                HunkLine::Removed("old".to_string()),
+                HunkLine::Added("new".to_string()),
+            ],
+        };
+
+        // Only comments, no actual content
+        let edited = "# All content deleted\n# User cancelled\n";
+        let result = parse_edited_hunk(edited, &original).unwrap();
+
+        assert!(result.is_none(), "Should return None for empty edit");
+    }
+
+    #[test]
+    fn test_parse_edited_hunk_no_changes() {
+        let original = DiffHunk {
+            index: 0,
+            header: "@@ -1,3 +1,3 @@".to_string(),
+            original_range: (1, 3),
+            new_range: (1, 3),
+            lines: vec![
+                HunkLine::Context("line1".to_string()),
+                HunkLine::Removed("old".to_string()),
+                HunkLine::Added("new".to_string()),
+            ],
+        };
+
+        // Only context lines (no + or -)
+        let edited = " line1\n line2\n line3\n";
+        let result = parse_edited_hunk(edited, &original).unwrap();
+
+        assert!(
+            result.is_none(),
+            "Should return None when no changes present"
+        );
+    }
+
+    #[test]
+    fn test_get_editor_fallback() {
+        // This test just ensures get_editor doesn't panic
+        // In a real environment it should return something
+        let editor = get_editor();
+        assert!(!editor.is_empty());
+    }
+
+    #[test]
+    fn test_interactive_command_from_char() {
+        assert_eq!(
+            InteractiveCommand::from_char('y'),
+            Some(InteractiveCommand::Yes)
+        );
+        assert_eq!(
+            InteractiveCommand::from_char('n'),
+            Some(InteractiveCommand::No)
+        );
+        assert_eq!(
+            InteractiveCommand::from_char('e'),
+            Some(InteractiveCommand::Edit)
+        );
+        assert_eq!(
+            InteractiveCommand::from_char('s'),
+            Some(InteractiveCommand::Split)
+        );
+        assert_eq!(
+            InteractiveCommand::from_char('q'),
+            Some(InteractiveCommand::Quit)
+        );
+        assert_eq!(InteractiveCommand::from_char('x'), None);
+    }
 }
