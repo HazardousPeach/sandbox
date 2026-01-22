@@ -153,12 +153,20 @@ pub enum Action {
 
     /// Accept changes in the sandbox
     Accept {
+        /// Interactive patch mode - select individual hunks to accept (like git add -p)
+        #[arg(short = 'p', long = "patch")]
+        patch: bool,
+
         #[arg(value_name = "PATTERNS", num_args = 0..)]
         patterns: Option<Vec<String>>,
     },
 
     /// Reject changes in the sandbox
     Reject {
+        /// Interactive patch mode - select individual hunks to reject (like git checkout -p)
+        #[arg(short = 'p', long = "patch")]
+        patch: bool,
+
         #[arg(value_name = "PATTERNS", num_args = 0..)]
         patterns: Option<Vec<String>>,
     },

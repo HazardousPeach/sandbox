@@ -132,15 +132,17 @@ pub fn main() -> Result<()> {
                 &sandbox,
                 &patterns.unwrap_or_default(),
             ),
-            cli::Action::Reject { patterns } => actions::reject(
+            cli::Action::Reject { patch, patterns } => actions::reject(
                 &config,
                 &sandbox,
                 &patterns.unwrap_or_default(),
+                patch,
             ),
-            cli::Action::Accept { patterns } => actions::accept(
+            cli::Action::Accept { patch, patterns } => actions::accept(
                 &config,
                 &sandbox,
                 &patterns.unwrap_or_default(),
+                patch,
             ),
             cli::Action::Delete { yes, patterns } => actions::delete(
                 &config,
