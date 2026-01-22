@@ -120,17 +120,20 @@ impl Sandbox {
 
     pub fn determine_mounts(&self, config: &Config) -> Result<Vec<MountHash>> {
         // Check if we have a settings.json file in our storage dir (for nested sandboxes)
-        let settings_json = Path::new(&config.storage_dir).join("settings.json");
+        let settings_json =
+            Path::new(&config.storage_dir).join("settings.json");
         if settings_json.exists() {
             debug!(
                 "It looks like we are in a nested sandbox, reading mounts from {}",
                 settings_json.display()
             );
-            let parent_settings = SandboxSettings::load_from_file(&settings_json)
-                .context(format!(
-                    "Failed to read parent settings.json from {}",
-                    settings_json.display()
-                ))?;
+            let parent_settings = SandboxSettings::load_from_file(
+                &settings_json,
+            )
+            .context(format!(
+                "Failed to read parent settings.json from {}",
+                settings_json.display()
+            ))?;
             return Ok(parent_settings.mounts);
         }
 

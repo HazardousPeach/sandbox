@@ -119,7 +119,14 @@ pub fn accept(
     config: &Config,
     sandbox: &Sandbox,
     patterns: &[String],
+    patch: bool,
 ) -> Result<()> {
+    if patch {
+        return super::interactive::accept_interactive(
+            config, sandbox, patterns,
+        );
+    }
+
     trace!("Accepting changes from sandbox {}", sandbox.name);
 
     let cwd = std::env::current_dir()?;

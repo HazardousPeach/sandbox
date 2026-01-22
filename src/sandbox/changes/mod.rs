@@ -8,7 +8,10 @@
 
 pub mod change_entries;
 pub mod changes;
+pub mod diff_parser;
 pub mod file_details;
+pub mod hunk;
 
 pub use change_entries::*;
 pub use file_details::*;
+pub use hunk::*;

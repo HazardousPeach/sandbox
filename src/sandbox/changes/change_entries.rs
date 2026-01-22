@@ -324,6 +324,20 @@ impl ChangeEntries {
 }
 
 #[cfg(test)]
+impl ChangeEntry {
+    /// Create a simple ChangeEntry for testing purposes
+    pub fn test_entry(path: &Path) -> Self {
+        Self {
+            destination: path.to_path_buf(),
+            operation: EntryOperation::Set(SetType::Modify),
+            source: None,
+            staged: None,
+            tmp_path: None,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

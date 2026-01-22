@@ -11,7 +11,14 @@ pub fn reject(
     config: &Config,
     sandbox: &Sandbox,
     patterns: &[String],
+    patch: bool,
 ) -> Result<()> {
+    if patch {
+        return super::interactive::reject_interactive(
+            config, sandbox, patterns,
+        );
+    }
+
     trace!("Rejecting changes from sandbox {}", sandbox.name);
 
     let cwd = std::env::current_dir()?;

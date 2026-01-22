@@ -2,6 +2,7 @@ mod accept;
 mod config;
 mod delete;
 mod diff;
+mod interactive;
 mod list;
 mod reject;
 mod status;
