@@ -140,14 +140,22 @@ pub enum Action {
     /// patterns. Use `status /` to show status of all files in the sandbox.
     Status {
         /// Patterns of files to show
-        #[arg(value_name = "PATTERNS", num_args = 0..)]
+        #[arg(
+            value_name = "PATTERNS",
+            num_args = 0..,
+            add = ArgValueCompleter::new(changed_file_completion)
+        )]
         patterns: Option<Vec<String>>,
     },
 
     /// Show changes in the sandbox relative to the current changes
     Diff {
         /// Patterns of files to diff
-        #[arg(value_name = "PATTERNS", num_args = 0..)]
+        #[arg(
+            value_name = "PATTERNS",
+            num_args = 0..,
+            add = ArgValueCompleter::new(changed_file_completion)
+        )]
         patterns: Option<Vec<String>>,
     },
 
@@ -157,7 +165,11 @@ pub enum Action {
         #[arg(short = 'p', long = "patch")]
         patch: bool,
 
-        #[arg(value_name = "PATTERNS", num_args = 0..)]
+        #[arg(
+            value_name = "PATTERNS",
+            num_args = 0..,
+            add = ArgValueCompleter::new(changed_file_completion)
+        )]
         patterns: Option<Vec<String>>,
     },
 
@@ -167,7 +179,11 @@ pub enum Action {
         #[arg(short = 'p', long = "patch")]
         patch: bool,
 
-        #[arg(value_name = "PATTERNS", num_args = 0..)]
+        #[arg(
+            value_name = "PATTERNS",
+            num_args = 0..,
+            add = ArgValueCompleter::new(changed_file_completion)
+        )]
         patterns: Option<Vec<String>>,
     },
 
@@ -252,6 +268,71 @@ pub fn sandbox_name_completion(
             && path.join("overlay").is_dir()
         {
             completions.push(CompletionCandidate::new(file_name));
+        }
+    }
+
+    completions
+}
+
+pub fn changed_file_completion(
+    current: &std::ffi::OsStr,
+) -> Vec<CompletionCandidate> {
+    let uid_gid_home = match resolve_uid_gid_home() {
+        Ok(ugh) => {
+            if drop_privileges(ugh.uid, ugh.gid).is_err() {
+                return vec![];
+            }
+            ugh
+        }
+        Err(_) => return vec![],
+    };
+
+    let mut completions = vec![];
+    let Some(current_str) = current.to_str() else {
+        return completions;
+    };
+
+    let cli: Args = Args::parse();
+    let config = match resolve_config(cli.clone()) {
+        Ok(config) => config,
+        Err(_) => return completions,
+    };
+
+    let sandboxes_storage_dir = config.storage_dir.clone();
+
+    // Create sandbox instance
+    let sandbox = crate::sandbox::Sandbox::from_location(
+        &sandboxes_storage_dir,
+        &config.name,
+        uid_gid_home.uid,
+        uid_gid_home.gid,
+    );
+
+    // Get changes from the sandbox
+    let changes = match sandbox.changes(&config) {
+        Ok(changes) => changes,
+        Err(_) => return completions,
+    };
+
+    // Get current working directory
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(_) => return completions,
+    };
+
+    // Extract destination paths from changes and make them relative to cwd
+    for change in changes.iter() {
+        let path = &change.destination;
+
+        // Try to make path relative to cwd, otherwise use absolute path
+        let display_path = match path.strip_prefix(&cwd) {
+            Ok(relative) => relative.to_string_lossy().to_string(),
+            Err(_) => path.to_string_lossy().to_string(),
+        };
+
+        // Filter by current prefix
+        if display_path.starts_with(current_str) {
+            completions.push(CompletionCandidate::new(display_path));
         }
     }
 
