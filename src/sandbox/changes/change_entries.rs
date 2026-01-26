@@ -227,7 +227,7 @@ impl ChangeEntries {
     pub fn matching(&self, cwd: &Path, patterns: &[String]) -> ChangeEntries {
         let patterns: Vec<String> = patterns
             .iter()
-            .map(|pattern| {
+            .flat_map(|pattern| {
                 let negate = pattern.starts_with("!");
                 let pattern = if negate {
                     pattern[1..].to_string()
@@ -252,8 +252,10 @@ impl ChangeEntries {
                 }
                 let pattern = normalized.display().to_string();
 
-                let pattern = if pattern.ends_with("/") {
-                    format!("{}**", pattern)
+                // Special case for root directory. Other trailing slashes are
+                // stripped by PathBuf normalization above.
+                let patterns = if pattern == "/" {
+                    vec![format!("{}**", pattern)]
                 } else {
                     // Check if this pattern + "/" matches the beginning of any change entry's path
                     let pattern_with_slash = format!("{}/", pattern);
@@ -262,17 +264,20 @@ impl ChangeEntries {
                         dest_str.starts_with(&pattern_with_slash)
                     });
                     if is_directory_prefix {
-                        format!("{}/**", pattern)
+                        // Return both the directory itself AND its contents
+                        vec![pattern.clone(), format!("{}/**", pattern)]
                     } else {
-                        pattern
+                        vec![pattern]
                     }
                 };
 
-                if negate {
-                    format!("!{}", pattern)
-                } else {
-                    pattern.to_string()
-                }
+                patterns.into_iter().map(move |p| {
+                    if negate {
+                        format!("!{}", p)
+                    } else {
+                        p
+                    }
+                })
             })
             .collect();
 
