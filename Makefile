@@ -194,7 +194,9 @@ man build/sandbox.1.gz: build/sandbox.1
 completion-scripts: build
 	mkdir -p build
 	COMPLETE=bash ./target/debug/sandbox | sed 's|/.*/sandbox|sandbox|g' > build/sandbox-bash-completion
-	COMPLETE=zsh ./target/debug/sandbox | sed 's|/.*/sandbox|sandbox|g' > build/sandbox-zsh-completion
+	COMPLETE=zsh ./target/debug/sandbox | sed 's|/.*/sandbox|sandbox|g' > build/sandbox-zsh-completion.tmp
+	./build-helpers/enhance-zsh-completion.sh build/sandbox-zsh-completion.tmp build/sandbox-zsh-completion
+	rm -f build/sandbox-zsh-completion.tmp
 	COMPLETE=fish ./target/debug/sandbox | sed 's|/.*/sandbox|sandbox|g' > build/sandbox-fish-completion
 	
 	
