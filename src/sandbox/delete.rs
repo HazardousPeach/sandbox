@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::{actions::rmdir_recursive, sandbox::Sandbox};
+use crate::{sandbox::Sandbox, util::rmdir_recursive};
 use anyhow::{Context, Result};
 use log::{debug, trace};
 

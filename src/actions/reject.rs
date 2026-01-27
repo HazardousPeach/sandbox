@@ -2,7 +2,7 @@ use crate::{
     config::Config,
     outln,
     sandbox::{Sandbox, changes::changes::by_staged_descending},
-    util::sync_and_drop_caches,
+    util::{rmdir_recursive, sync_and_drop_caches},
 };
 use anyhow::{Context, Result};
 use log::{debug, trace};
@@ -42,7 +42,7 @@ pub fn reject(
 
             debug!("Rejecting {}", staged.path.display());
             if staged.is_dir() {
-                std::fs::remove_dir(&staged.path).context(format!(
+                rmdir_recursive(&staged.path).context(format!(
                     "Failed to remove directory {}",
                     staged.path.display()
                 ))?;
