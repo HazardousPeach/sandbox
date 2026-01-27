@@ -10,6 +10,7 @@ mod mount;
 mod mounts;
 mod output;
 mod resolve_uid_gid_home;
+mod rmdir;
 mod sync_and_drop_caches;
 
 pub use access::*;
@@ -24,4 +25,5 @@ pub use mount::*;
 pub use mounts::*;
 pub use output::*;
 pub use resolve_uid_gid_home::*;
+pub use rmdir::*;
 pub use sync_and_drop_caches::*;
