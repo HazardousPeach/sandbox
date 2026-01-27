@@ -1131,9 +1131,10 @@ fn calculate_remaining_for_upper(
     use crate::sandbox::changes::hunk::HunkLine;
 
     // The upper file after partial accept should represent:
-    // The modified content minus the accepted changes
-    // i.e., if we accepted some hunks, the upper file should contain
-    // a version that, when diffed against the new lower, shows only the unaccepted hunks
+    // The FULL modified content with ALL changes (both accepted and unaccepted).
+    // In OverlayFS, when an upper file exists, it COMPLETELY REPLACES the lower file.
+    // The lower file will have accepted changes, and upper must also have those changes
+    // plus any unaccepted changes, so the merged view shows all changes correctly.
 
     let modified = file_hunks.modified_content.as_ref().ok_or_else(|| {
         anyhow::anyhow!("No modified content for calculating remaining")
@@ -1166,12 +1167,7 @@ fn calculate_remaining_for_upper(
     let mut result_lines: Vec<String> = Vec::new();
     let mut original_line_idx = 0;
 
-    for (hunk_idx, hunk) in file_hunks.hunks.iter().enumerate() {
-        let accepted = selections
-            .get(hunk_idx)
-            .map(|s| *s == HunkSelection::Accept)
-            .unwrap_or(false);
-
+    for hunk in file_hunks.hunks.iter() {
         // Add lines from original up to this hunk
         let hunk_start = hunk.original_range.0.saturating_sub(1);
         while original_line_idx < hunk_start
@@ -1190,20 +1186,13 @@ fn calculate_remaining_for_upper(
                     original_line_idx += 1;
                 }
                 HunkLine::Added(content) => {
-                    if !accepted {
-                        // Only include additions that weren't accepted
-                        result_lines.push(content.clone());
-                    }
+                    // Always include added lines (both accepted and unaccepted)
+                    // Upper must contain the full modified state
+                    result_lines.push(content.clone());
                 }
                 HunkLine::Removed(_) => {
-                    if !accepted {
-                        // Keep removed lines only if this hunk wasn't accepted
-                        if original_line_idx < original_lines.len() {
-                            result_lines.push(
-                                original_lines[original_line_idx].to_string(),
-                            );
-                        }
-                    }
+                    // Never include removed lines - they're being deleted in the modified version
+                    // (both for accepted and unaccepted hunks)
                     original_line_idx += 1;
                 }
             }
