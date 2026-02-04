@@ -93,7 +93,7 @@ impl Sandbox {
         let result = unsafe { fork() }.context(format!("failed to fork"))?;
         match result {
             ForkResult::Parent { child } => {
-                /* Parent process */
+                /* Parent process - we are PID 1 in the namespace and must reap all zombies */
                 let mut ct = 0;
 
                 loop {
@@ -136,6 +136,14 @@ impl Sandbox {
                             );
                         }
                         _ => {
+                            /* As PID 1 in the namespace, we must reap orphaned zombie processes.
+                             * Use waitpid(-1, WNOHANG) to reap any zombie without blocking. */
+                            loop {
+                                match waitpid(Pid::from_raw(-1), Some(nix::sys::wait::WaitPidFlag::WNOHANG)) {
+                                    Ok(WaitStatus::StillAlive) | Err(_) => break,
+                                    _ => continue, // Keep reaping zombies
+                                }
+                            }
                             continue;
                         }
                     }
