@@ -1,5 +1,7 @@
 #![allow(static_mut_refs)]
 use crate::sandbox::Sandbox;
+use crate::sandbox::SandboxSettings;
+use crate::config::Network;
 use crate::util::drop_privileges;
 use anyhow::{Context, Result, anyhow};
 use libc::syscall;
@@ -23,10 +25,21 @@ impl Sandbox {
         let cwd = std::env::current_dir()
             .context(format!("failed to get current directory"))?;
 
+        // Load sandbox settings to determine which namespaces to join
+        let settings_path = self.data_storage_dir.join("settings.json");
+        let settings = SandboxSettings::load_from_file(&settings_path)
+            .context(format!("Failed to load sandbox settings from {}", settings_path.display()))?;
+
         let ns_flags = libc::CLONE_NEWNS
             | libc::CLONE_NEWPID
             | libc::CLONE_NEWIPC
-            | libc::CLONE_NEWNET
+            | (if let Network::Host = settings.network {
+                trace!("Sandbox uses host network, not joining network namespace");
+                0
+            } else {
+                trace!("Sandbox has isolated network, joining network namespace");
+                libc::CLONE_NEWNET
+            })
             | libc::CLONE_NEWCGROUP
             | libc::CLONE_NEWUTS;
 
