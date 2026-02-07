@@ -300,6 +300,12 @@ pub fn changed_file_completion(
 
     let sandboxes_storage_dir = config.storage_dir.clone();
 
+    // Get current working directory
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(_) => return completions,
+    };
+
     // Create sandbox instance
     let sandbox = crate::sandbox::Sandbox::from_location(
         &sandboxes_storage_dir,
@@ -308,15 +314,10 @@ pub fn changed_file_completion(
         uid_gid_home.gid,
     );
 
-    // Get changes from the sandbox
-    let changes = match sandbox.changes(&config) {
+    // ✅ OPTIMIZATION: Only scan files in the current directory's mount point
+    // This dramatically reduces the number of files examined for completion
+    let changes = match sandbox.changes_in_directory(&cwd, config.ignored) {
         Ok(changes) => changes,
-        Err(_) => return completions,
-    };
-
-    // Get current working directory
-    let cwd = match std::env::current_dir() {
-        Ok(cwd) => cwd,
         Err(_) => return completions,
     };
 
@@ -324,10 +325,10 @@ pub fn changed_file_completion(
     for change in changes.iter() {
         let path = &change.destination;
 
-        // Try to make path relative to cwd, otherwise use absolute path
+        // Make path relative to cwd
         let display_path = match path.strip_prefix(&cwd) {
             Ok(relative) => relative.to_string_lossy().to_string(),
-            Err(_) => path.to_string_lossy().to_string(),
+            Err(_) => continue, // Skip files not in cwd (shouldn't happen with filtered scan)
         };
 
         // Filter by current prefix
