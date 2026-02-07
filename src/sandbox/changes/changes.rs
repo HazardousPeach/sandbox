@@ -4,7 +4,6 @@ use crate::sandbox::changes::*;
 use crate::util::find_mount_point;
 use anyhow::Context;
 use anyhow::Result;
-use log::error;
 use log::info;
 use log::trace;
 use nix::NixPath;
@@ -52,6 +51,27 @@ impl Sandbox {
      * For more information on the algorithm see the accept action documentation.
      */
     pub fn changes(&self, config: &Config) -> Result<ChangeEntries> {
+        self.changes_internal(config.ignored, None)
+    }
+
+    /**
+     * Fast path for getting changes in a specific directory only.
+     * This scans only the mount point containing the directory, dramatically reducing
+     * the number of files that need to be examined. Useful for shell completion.
+     */
+    pub fn changes_in_directory(
+        &self,
+        directory: &Path,
+        include_ignored: bool,
+    ) -> Result<ChangeEntries> {
+        self.changes_internal(include_ignored, Some(directory))
+    }
+
+    fn changes_internal(
+        &self,
+        include_ignored: bool,
+        directory_filter: Option<&Path>,
+    ) -> Result<ChangeEntries> {
         let mut change_entries: Vec<ChangeEntry> = Vec::new();
 
         /* Files that are moved (and not re-created) will have a corresponding deleted indicator in
@@ -62,7 +82,8 @@ impl Sandbox {
 
         /* Get a list of all of the paths in the upper directory along with their corresponding
          * source and destination paths, and file details. */
-        let upper_entries = self.upper_entries(config.ignored)?;
+        let upper_entries =
+            self.upper_entries_filtered(include_ignored, directory_filter)?;
 
         /* First pass to find all renamed paths and build a hash of where they are coming from
          * so we can avoid removing them when we see the whiteout/opaque. */
@@ -276,99 +297,144 @@ impl Sandbox {
      * Walks the upper directory and creates a list of paths that have been changed in some way.
      * This primarily exists to deal with decoding the base32 encoded paths and making
      * it easier to reason about and reduce the clutter of the `changes` function.
+     *
+     * If directory_filter is provided, only scans files within that directory's mount point
+     * and further filters to paths under that directory.
      */
-    fn upper_entries(&self, include_ignored: bool) -> Result<Vec<UpperEntry>> {
+    fn upper_entries_filtered(
+        &self,
+        include_ignored: bool,
+        directory_filter: Option<&Path>,
+    ) -> Result<Vec<UpperEntry>> {
         let mut resolved_ignores: HashMap<PathBuf, Vec<IgnorePattern>> =
             HashMap::new();
         let mut ret = Vec::new();
 
-        for walkdir_entry in WalkDir::new(&self.upper_base)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = walkdir_entry.path().strip_prefix(&self.upper_base)?;
+        // Determine which mount point directories to scan
+        let scan_configs = if let Some(target_dir) = directory_filter {
+            // Optimization: Only scan the specific mount point containing target_dir
+            let mount_point = find_mount_point(target_dir.to_path_buf())?;
+            let encoded = data_encoding::BASE32_NOPAD
+                .encode(mount_point.to_string_lossy().as_bytes());
 
-            let base = match path.components().next() {
-                Some(base) => base,
-                None => {
-                    continue;
-                }
-            };
+            // Start the walk at the target directory within the mount point, not the mount root
+            let rel_path = target_dir
+                .strip_prefix(&mount_point)
+                .unwrap_or(Path::new(""));
 
-            let base_decoded = match data_encoding::BASE32_NOPAD_NOCASE
-                .decode(base.as_os_str().as_bytes())
+            let scan_root = self.upper_base.join(&encoded).join(rel_path);
+
+            vec![(scan_root, encoded, mount_point, Some(target_dir))]
+        } else {
+            // Scan all mount point directories
+            match std::fs::read_dir(&self.upper_base) {
+                Ok(entries) => entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .filter_map(|entry| {
+                        let encoded = entry.file_name();
+                        let encoded_str = encoded.to_str()?;
+
+                        // Decode to get mount point
+                        let decoded = data_encoding::BASE32_NOPAD_NOCASE
+                            .decode(encoded_str.as_bytes())
+                            .ok()?;
+                        let mount_point =
+                            String::from_utf8(decoded).ok()?.into();
+
+                        Some((entry.path(), encoded_str.to_string(), mount_point, None))
+                    })
+                    .collect(),
+                Err(_) => vec![],
+            }
+        };
+
+        // Scan each mount point directory
+        for (scan_root, encoded_base, mount_point, filter_dir) in scan_configs {
+            if !scan_root.exists() {
+                continue;
+            }
+
+            for walkdir_entry in
+                WalkDir::new(&scan_root).into_iter().filter_map(|e| e.ok())
             {
-                Ok(decoded) => match String::from_utf8(decoded) {
-                    Ok(s) => s,
-                    Err(_) => {
-                        error!(
-                            "Skipping invalid base32 encoded base path: {}",
-                            base.as_os_str().to_string_lossy()
-                        );
+                let path = walkdir_entry.path().strip_prefix(&self.upper_base)?;
+
+                let base = match path.components().next() {
+                    Some(base) => base,
+                    None => {
                         continue;
                     }
-                },
-                Err(_) => {
-                    error!(
-                        "Skipping invalid base32 encoded base path: {}",
-                        base.as_os_str().to_string_lossy()
-                    );
+                };
+
+                // Verify this matches our expected encoded base
+                if base.as_os_str().to_string_lossy() != encoded_base {
                     continue;
                 }
-            };
 
-            let sub = path.components().skip(1).collect::<Vec<_>>();
+                let base_decoded = mount_point.to_string_lossy().to_string();
 
-            if sub.is_empty() {
-                continue;
-            }
+                let sub = path.components().skip(1).collect::<Vec<_>>();
 
-            let mut lower_path = PathBuf::from(base_decoded.clone());
-            for component in &sub {
-                lower_path.push(component);
-            }
+                if sub.is_empty() {
+                    continue;
+                }
 
-            /* Check if we should ignore this based on ignore rules and files */
-            if !include_ignored
-                && self.is_ignored(
-                    &base_decoded,
+                let mut lower_path = PathBuf::from(base_decoded.clone());
+                for component in &sub {
+                    lower_path.push(component);
+                }
+
+                // Early filter: skip if not under target directory
+                if let Some(filter_dir) = filter_dir {
+                    if !lower_path.starts_with(filter_dir) {
+                        continue;
+                    }
+                }
+
+                /* Check if we should ignore this based on ignore rules and files */
+                if !include_ignored
+                    && self.is_ignored(
+                        &base_decoded,
+                        &lower_path,
+                        path,
+                        &mut resolved_ignores,
+                    )
+                {
+                    continue;
+                }
+
+                let mut upper_path = self.upper_base.clone();
+                upper_path.push(base);
+                let upper_root = upper_path.clone();
+                for component in &sub {
+                    upper_path.push(component);
+                }
+
+                /* Note, get_source_lower_path_for_upper_path deals with following redirects */
+                let source_path = get_source_lower_path_for_upper_path(
+                    &upper_path,
+                    &upper_root,
                     &lower_path,
-                    path,
-                    &mut resolved_ignores,
-                )
-            {
-                continue;
+                    &PathBuf::from(base_decoded.clone()),
+                )?;
+
+                let source_details = match &source_path {
+                    Some(source_path) => FileDetails::from_path(source_path)?,
+                    None => None,
+                };
+                let upper_details = FileDetails::from_path(&upper_path)?.context(
+                    "Failed to get file details for upper path (something is very wrong)",
+                )?;
+
+                ret.push(UpperEntry {
+                    lower_path,
+                    upper_path,
+                    upper_details,
+                    source_path,
+                    source_details,
+                });
             }
-
-            let mut upper_path = self.upper_base.clone();
-            upper_path.push(base);
-            let upper_root = upper_path.clone();
-            for component in &sub {
-                upper_path.push(component);
-            }
-
-            /* Note, get_source_lower_path_for_upper_path deals with following redirects */
-            let source_path = get_source_lower_path_for_upper_path(
-                &upper_path,
-                &upper_root,
-                &lower_path,
-                &PathBuf::from(base_decoded.clone()),
-            )?;
-
-            let source_details = match &source_path {
-                Some(source_path) => FileDetails::from_path(source_path)?,
-                None => None,
-            };
-            let upper_details = FileDetails::from_path(&upper_path)?
-                .context("Failed to get file details for upper path (something is very wrong)")?;
-
-            ret.push(UpperEntry {
-                lower_path,
-                upper_path,
-                upper_details,
-                source_path,
-                source_details,
-            });
         }
 
         Ok(ret)
