@@ -10,6 +10,7 @@ use crate::outln;
 use crate::sandbox::Sandbox;
 use crate::sandbox::changes::{
     ChangeEntry, EntryOperation, FileHunks, HunkSelection, SetType,
+    changes::determine_scan_directories,
     diff_parser::{
         create_deleted_file_hunks, create_new_file_hunks, parse_file_to_hunks,
     },
@@ -56,7 +57,8 @@ pub fn accept_interactive(
     patterns: &[String],
 ) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let all_changes = sandbox.changes(config)?;
+    let scan_dirs = determine_scan_directories(&cwd, patterns);
+    let all_changes = sandbox.changes_in_directories(&scan_dirs, config.ignored)?;
     let changes = all_changes.matching(&cwd, patterns);
 
     if changes.is_empty() {
@@ -90,7 +92,8 @@ pub fn reject_interactive(
     patterns: &[String],
 ) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let all_changes = sandbox.changes(config)?;
+    let scan_dirs = determine_scan_directories(&cwd, patterns);
+    let all_changes = sandbox.changes_in_directories(&scan_dirs, config.ignored)?;
     let changes = all_changes.matching(&cwd, patterns);
 
     if changes.is_empty() {

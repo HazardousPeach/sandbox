@@ -101,7 +101,7 @@ Once we have a change set we can apply it.
 */
 
 use crate::outln;
-use crate::sandbox::changes::changes::{by_destination, by_reverse_source};
+use crate::sandbox::changes::changes::{by_destination, by_reverse_source, determine_scan_directories};
 use crate::sandbox::changes::{ChangeEntries, EntryOperation, FileDetails};
 use crate::util::{find_mount_point, rmdir_recursive, sync_and_drop_caches};
 use crate::{config::Config, sandbox::Sandbox};
@@ -130,7 +130,8 @@ pub fn accept(
     trace!("Accepting changes from sandbox {}", sandbox.name);
 
     let cwd = std::env::current_dir()?;
-    let all_changes = sandbox.changes(config)?;
+    let scan_dirs = determine_scan_directories(&cwd, patterns);
+    let all_changes = sandbox.changes_in_directories(&scan_dirs, config.ignored)?;
 
     let mut changes = all_changes.matching(&cwd, patterns);
     let non_matching_count =

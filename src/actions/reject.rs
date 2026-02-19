@@ -1,7 +1,7 @@
 use crate::{
     config::Config,
     outln,
-    sandbox::{Sandbox, changes::changes::by_staged_descending},
+    sandbox::{Sandbox, changes::changes::{by_staged_descending, determine_scan_directories}},
     util::{rmdir_recursive, sync_and_drop_caches},
 };
 use anyhow::{Context, Result};
@@ -22,7 +22,8 @@ pub fn reject(
     trace!("Rejecting changes from sandbox {}", sandbox.name);
 
     let cwd = std::env::current_dir()?;
-    let changes = sandbox.changes(config)?;
+    let scan_dirs = determine_scan_directories(&cwd, patterns);
+    let changes = sandbox.changes_in_directories(&scan_dirs, config.ignored)?;
 
     let mut changes = changes.matching(&cwd, patterns);
     changes.sort_by(by_staged_descending);
