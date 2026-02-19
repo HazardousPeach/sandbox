@@ -11,9 +11,83 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use walkdir::WalkDir;
+
+/// Given the cwd and user-provided patterns, determine the narrowest
+/// set of directories we need to scan.
+pub fn determine_scan_directories(cwd: &Path, patterns: &[String]) -> Vec<PathBuf> {
+    if patterns.is_empty() {
+        return vec![cwd.to_path_buf()];
+    }
+
+    let mut directories: Vec<PathBuf> = Vec::new();
+
+    for pattern in patterns {
+        // Skip negation patterns — they exclude from results, not define scan areas
+        if pattern.starts_with('!') {
+            continue;
+        }
+
+        let pattern_str = pattern.as_str();
+
+        // Resolve to absolute
+        let resolved = if pattern_str.starts_with('/') {
+            PathBuf::from(pattern_str)
+        } else {
+            cwd.join(pattern_str)
+        };
+
+        // Normalize (handle ..)
+        let mut normalized = PathBuf::new();
+        for component in resolved.components() {
+            if component == Component::ParentDir {
+                normalized.pop();
+            } else {
+                normalized.push(component);
+            }
+        }
+
+        // Strip glob characters to get the non-glob directory prefix
+        let mut dir = PathBuf::new();
+        for component in normalized.components() {
+            let s = component.as_os_str().to_string_lossy();
+            if s.contains('*') || s.contains('?') || s.contains('[') {
+                break;
+            }
+            dir.push(component);
+        }
+
+        // If the prefix points to a file (not a directory), use its parent
+        if dir.exists() && !dir.is_dir() {
+            if let Some(parent) = dir.parent() {
+                dir = parent.to_path_buf();
+            }
+        }
+
+        if dir.as_os_str().is_empty() {
+            dir = PathBuf::from("/");
+        }
+        directories.push(dir);
+    }
+
+    // If all patterns were negations, fall back to cwd
+    if directories.is_empty() {
+        return vec![cwd.to_path_buf()];
+    }
+
+    // Deduplicate: if dir A is ancestor of dir B, keep only A
+    directories.sort();
+    directories.dedup();
+    let mut result: Vec<PathBuf> = Vec::new();
+    for dir in &directories {
+        if !result.iter().any(|existing| dir.starts_with(existing)) {
+            result.push(dir.clone());
+        }
+    }
+
+    result
+}
 
 struct UpperEntry {
     lower_path: PathBuf,
@@ -65,6 +139,33 @@ impl Sandbox {
         include_ignored: bool,
     ) -> Result<ChangeEntries> {
         self.changes_internal(include_ignored, Some(directory))
+    }
+
+    /**
+     * Scan multiple directories and merge results, deduplicating by destination path.
+     */
+    pub fn changes_in_directories(
+        &self,
+        directories: &[PathBuf],
+        include_ignored: bool,
+    ) -> Result<ChangeEntries> {
+        if directories.len() == 1 {
+            return self.changes_in_directory(&directories[0], include_ignored);
+        }
+
+        let mut all_entries = Vec::new();
+        let mut seen_destinations = HashSet::new();
+
+        for dir in directories {
+            let changes = self.changes_in_directory(dir, include_ignored)?;
+            for change in changes.iter() {
+                if seen_destinations.insert(change.destination.clone()) {
+                    all_entries.push(change.clone());
+                }
+            }
+        }
+
+        Ok(ChangeEntries(all_entries))
     }
 
     fn changes_internal(
@@ -771,5 +872,100 @@ mod tests {
     fn test_has_opaque_ancestor() {
         let path = PathBuf::from("/tmp/test-non-existent-path/foo");
         assert!(!has_opaque_ancestor(&path));
+    }
+
+    #[test]
+    fn test_determine_scan_directories_no_patterns() {
+        let cwd = PathBuf::from("/home/user/project");
+        let result = determine_scan_directories(&cwd, &[]);
+        assert_eq!(result, vec![PathBuf::from("/home/user/project")]);
+    }
+
+    #[test]
+    fn test_determine_scan_directories_absolute_pattern() {
+        let cwd = PathBuf::from("/home/user/project");
+        let patterns = vec!["/var/log/app.log".to_string()];
+        let result = determine_scan_directories(&cwd, &patterns);
+        // /var/log/app.log doesn't exist, so it stays as-is (dir prefix)
+        assert_eq!(result, vec![PathBuf::from("/var/log/app.log")]);
+    }
+
+    #[test]
+    fn test_determine_scan_directories_relative_pattern() {
+        let cwd = PathBuf::from("/home/user/project");
+        let patterns = vec!["src/main.rs".to_string()];
+        let result = determine_scan_directories(&cwd, &patterns);
+        assert_eq!(result, vec![PathBuf::from("/home/user/project/src/main.rs")]);
+    }
+
+    #[test]
+    fn test_determine_scan_directories_glob_pattern() {
+        let cwd = PathBuf::from("/home/user/project");
+        let patterns = vec!["src/*.rs".to_string()];
+        let result = determine_scan_directories(&cwd, &patterns);
+        assert_eq!(result, vec![PathBuf::from("/home/user/project/src")]);
+    }
+
+    #[test]
+    fn test_determine_scan_directories_negation_only_falls_back_to_cwd() {
+        let cwd = PathBuf::from("/home/user/project");
+        let patterns = vec!["!src/*.rs".to_string()];
+        let result = determine_scan_directories(&cwd, &patterns);
+        // Negation-only patterns don't define scan areas, so we fall back to cwd
+        assert_eq!(result, vec![PathBuf::from("/home/user/project")]);
+    }
+
+    #[test]
+    fn test_determine_scan_directories_negation_ignored_with_positive() {
+        let cwd = PathBuf::from("/home/user/project");
+        let patterns = vec![
+            "src/*.rs".to_string(),
+            "!src/test.rs".to_string(),
+        ];
+        let result = determine_scan_directories(&cwd, &patterns);
+        // Only the positive pattern contributes a scan directory
+        assert_eq!(result, vec![PathBuf::from("/home/user/project/src")]);
+    }
+
+    #[test]
+    fn test_determine_scan_directories_parent_dir_normalization() {
+        let cwd = PathBuf::from("/home/user/project");
+        let patterns = vec!["../other/file.txt".to_string()];
+        let result = determine_scan_directories(&cwd, &patterns);
+        assert_eq!(result, vec![PathBuf::from("/home/user/other/file.txt")]);
+    }
+
+    #[test]
+    fn test_determine_scan_directories_dedup_ancestor() {
+        let cwd = PathBuf::from("/home/user/project");
+        let patterns = vec![
+            "/home/user/project/src/main.rs".to_string(),
+            "/home/user/project/src/lib.rs".to_string(),
+            "/home/user/project/src".to_string(),
+        ];
+        let result = determine_scan_directories(&cwd, &patterns);
+        assert_eq!(result, vec![PathBuf::from("/home/user/project/src")]);
+    }
+
+    #[test]
+    fn test_determine_scan_directories_multiple_unrelated() {
+        let cwd = PathBuf::from("/home/user/project");
+        let patterns = vec![
+            "/var/log/*.log".to_string(),
+            "/etc/conf/*.conf".to_string(),
+        ];
+        let result = determine_scan_directories(&cwd, &patterns);
+        assert_eq!(result, vec![
+            PathBuf::from("/etc/conf"),
+            PathBuf::from("/var/log"),
+        ]);
+    }
+
+    #[test]
+    fn test_determine_scan_directories_glob_at_root() {
+        let cwd = PathBuf::from("/home/user");
+        let patterns = vec!["*".to_string()];
+        let result = determine_scan_directories(&cwd, &patterns);
+        assert_eq!(result, vec![PathBuf::from("/home/user")]);
     }
 }

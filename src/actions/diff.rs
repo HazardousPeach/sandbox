@@ -9,7 +9,7 @@ use std::process::Command;
 
 use crate::{
     config::Config,
-    sandbox::{Sandbox, changes::EntryOperation},
+    sandbox::{Sandbox, changes::{EntryOperation, changes::determine_scan_directories}},
 };
 
 pub fn diff(
@@ -25,7 +25,8 @@ pub fn diff(
     }
 
     let cwd = std::env::current_dir()?;
-    let all_changes = sandbox.changes(config)?;
+    let scan_dirs = determine_scan_directories(&cwd, patterns);
+    let all_changes = sandbox.changes_in_directories(&scan_dirs, config.ignored)?;
     let changes = all_changes.matching(&cwd, patterns);
 
     // Exercise `EntryOperation::Error` handling during coverage builds.

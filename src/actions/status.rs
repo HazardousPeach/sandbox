@@ -5,7 +5,7 @@ use crate::{
         Sandbox,
         changes::{
             ChangeEntries, EntryOperation,
-            changes::{by_destination, by_reverse_source},
+            changes::{by_destination, by_reverse_source, determine_scan_directories},
         },
     },
     util::set_json_output,
@@ -22,7 +22,8 @@ pub fn status(
     trace!("Status of sandbox {}", sandbox.name);
 
     let cwd = std::env::current_dir()?;
-    let all_changes = sandbox.changes(config)?;
+    let scan_dirs = determine_scan_directories(&cwd, patterns);
+    let all_changes = sandbox.changes_in_directories(&scan_dirs, config.ignored)?;
     let mut changes = all_changes.matching(&cwd, patterns);
     let non_matching_count =
         ChangeEntries::calculate_non_matching_count(&all_changes, &changes);
