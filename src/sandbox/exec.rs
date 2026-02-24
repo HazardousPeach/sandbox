@@ -6,7 +6,10 @@ use libc::syscall;
 use log::trace;
 use nix::libc::setns;
 use nix::sys::wait::{WaitStatus, waitpid};
-use nix::unistd::{ForkResult, Pid, chdir, chroot, execvpe, fork};
+use nix::unistd::{
+    ForkResult, Gid, Pid, Uid, chdir, chroot, execvpe, fork, getgid, getuid,
+    setresgid, setresuid,
+};
 use std::ffi::{CString, c_int};
 #[cfg(feature = "coverage")]
 unsafe extern "C" {
@@ -54,6 +57,29 @@ impl Sandbox {
             ns_flags | libc::CLONE_FS // invalid flag combination with newns
         } else {
             ns_flags
+        };
+
+        /* pidfd-based setns() uses ptrace_may_access() to verify the
+         * caller can access the target process. This requires:
+         *   1. The caller's real UID/GID matches the target's UIDs/GIDs,
+         *      or CAP_SYS_PTRACE is available.
+         *   2. The caller is dumpable (dumpable == SUID_DUMP_USER == 1).
+         *
+         * When running as a setuid binary, real UID != 0, which fails
+         * check (1). EUID transitions (e.g., in access checks) can set
+         * dumpable to SUID_DUMP_ROOT (2), which fails check (2).
+         *
+         * Fix: temporarily elevate real UID/GID to root (restoring the
+         * original as the saved UID/GID), then reset dumpable to 1 since
+         * changing real UID clears it. */
+        let saved_ruid = getuid();
+        let saved_rgid = getgid();
+        setresuid(Uid::from_raw(0), Uid::from_raw(0), saved_ruid)
+            .context("failed to set real UID to root for namespace join")?;
+        setresgid(Gid::from_raw(0), Gid::from_raw(0), saved_rgid)
+            .context("failed to set real GID to root for namespace join")?;
+        unsafe {
+            libc::prctl(libc::PR_SET_DUMPABLE, 1);
         };
 
         /* Join the sandbox namespaces */

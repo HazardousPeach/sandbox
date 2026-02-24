@@ -316,6 +316,35 @@ impl Sandbox {
     ) -> Result<()> {
         trace!("Setting up sandbox root process");
 
+        /* Normalize credentials and dumpable state for pidfd-based setns().
+         *
+         * When another process uses pidfd_open + setns() to join our
+         * namespaces, the kernel's ptrace_may_access() check verifies:
+         *   1. The caller's real UID/GID matches ALL of our uid/euid/suid
+         *      and gid/egid/sgid, or the caller has CAP_SYS_PTRACE.
+         *   2. Our dumpable flag == SUID_DUMP_USER (1).
+         *
+         * When launched via a setuid binary, we inherit ruid!=0 from the
+         * caller and dumpable=suid_dumpable (typically 2). Both cause
+         * ptrace_may_access to fail when CAP_SYS_PTRACE is unavailable.
+         *
+         * Fix: set all UIDs/GIDs to root and restore dumpable to 1. */
+        nix::unistd::setresuid(
+            Uid::from_raw(0),
+            Uid::from_raw(0),
+            Uid::from_raw(0),
+        )
+        .context("failed to normalize sandbox PID 1 UIDs to root")?;
+        nix::unistd::setresgid(
+            Gid::from_raw(0),
+            Gid::from_raw(0),
+            Gid::from_raw(0),
+        )
+        .context("failed to normalize sandbox PID 1 GIDs to root")?;
+        unsafe {
+            libc::prctl(libc::PR_SET_DUMPABLE, 1);
+        }
+
         #[cfg(feature = "coverage")]
         let cwd = nix::unistd::getcwd()?;
 
