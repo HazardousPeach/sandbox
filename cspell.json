@@ -181,6 +181,7 @@
         "resgid",
         "resolv",
         "resuid",
+        "rgid",
         "rmdirs",
         "rstest",
         "ruid",
