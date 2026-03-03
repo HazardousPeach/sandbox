@@ -119,6 +119,14 @@ pub struct Args {
     pub sandboxed_command: Option<Vec<String>>,
 }
 
+#[derive(clap::ValueEnum, Clone, Debug, Default)]
+pub enum ColorMode {
+    Always,
+    #[default]
+    Auto,
+    Never,
+}
+
 #[derive(clap::Subcommand, Clone, Debug)]
 #[command(subcommand_help_heading = "Actions")]
 pub enum Action {
@@ -150,6 +158,18 @@ pub enum Action {
 
     /// Show changes in the sandbox relative to the current changes
     Diff {
+        /// Control color output: 'always', 'auto', or 'never'.
+        /// With no value, --color means 'always'.
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = ColorMode::Auto,
+            default_missing_value = "always",
+            num_args = 0..=1,
+            require_equals = true,
+        )]
+        color: ColorMode,
+
         /// Patterns of files to diff
         #[arg(
             value_name = "PATTERNS",
