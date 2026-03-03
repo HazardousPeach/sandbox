@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::{
-    config::Config,
+    config::{Config, cli::ColorMode},
     sandbox::{Sandbox, changes::{EntryOperation, changes::determine_scan_directories}},
 };
 
@@ -17,6 +17,7 @@ pub fn diff(
     json: bool,
     sandbox: &Sandbox,
     patterns: &[String],
+    color: &ColorMode,
 ) -> Result<()> {
     trace!("Diffing sandbox {}", sandbox.name);
 
@@ -45,9 +46,11 @@ pub fn diff(
         });
     }
 
-    let should_colorize = SHOULD_COLORIZE.should_colorize();
-    let upper_cwd_str = config.upper_cwd.to_string_lossy();
-    let replacement = format!("<{}>", sandbox.name).cyan().to_string();
+    let should_colorize = match color {
+        ColorMode::Always => true,
+        ColorMode::Never => false,
+        ColorMode::Auto => SHOULD_COLORIZE.should_colorize(),
+    };
 
     #[cfg(feature = "coverage")]
     let should_colorize = if std::env::var_os("TEST_FORCE_DIFF_COLOR").is_some()
@@ -56,6 +59,9 @@ pub fn diff(
     } else {
         should_colorize
     };
+
+    let upper_cwd_str = config.upper_cwd.to_string_lossy();
+    let replacement = format!("<{}>", sandbox.name).cyan().to_string();
 
     for change in changes.iter() {
         let stdout = std::io::stdout();
