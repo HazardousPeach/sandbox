@@ -129,6 +129,45 @@ impl Sandbox {
     }
 
     /**
+     * List changed entry names directly within a directory by reading the overlay
+     * upper directory. No recursion or change analysis — just a read_dir.
+     * Returns destination paths for entries that have changes in the overlay.
+     * Useful for shell completion.
+     */
+    pub fn changed_names_in_directory(&self, directory: &Path) -> Result<Vec<PathBuf>> {
+        let upper_dir = self.overlay_upper_path(directory)?;
+
+        let mut results = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&upper_dir) {
+            for entry in entries.flatten() {
+                let dest = directory.join(entry.file_name());
+                results.push(dest);
+            }
+        }
+        Ok(results)
+    }
+
+    /**
+     * Check whether a path corresponds to a directory in the overlay upper filesystem.
+     */
+    pub fn is_changed_directory(&self, path: &Path) -> bool {
+        self.overlay_upper_path(path)
+            .map(|p| p.is_dir())
+            .unwrap_or(false)
+    }
+
+    /// Map a real filesystem path to its location in the overlay upper directory.
+    fn overlay_upper_path(&self, path: &Path) -> Result<PathBuf> {
+        let mount_point = find_mount_point(path.to_path_buf())?;
+        let encoded = data_encoding::BASE32_NOPAD
+            .encode(mount_point.to_string_lossy().as_bytes());
+        let rel_path = path
+            .strip_prefix(&mount_point)
+            .unwrap_or(Path::new(""));
+        Ok(self.upper_base.join(&encoded).join(rel_path))
+    }
+
+    /**
      * Fast path for getting changes in a specific directory only.
      * This scans only the mount point containing the directory, dramatically reducing
      * the number of files that need to be examined. Useful for shell completion.

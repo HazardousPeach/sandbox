@@ -30,7 +30,21 @@ function _clap_dynamic_completer_sandbox_base() {
     )}")
 
     if [[ -n $completions ]]; then
-        _describe 'values' completions
+        # Separate tilde-prefixed completions to avoid shell escaping the ~
+        local -a tilde_completions regular_completions
+        for c in $completions; do
+            if [[ "$c" == '~'* ]]; then
+                tilde_completions+=("$c")
+            else
+                regular_completions+=("$c")
+            fi
+        done
+        if [[ -n $regular_completions ]]; then
+            _describe 'values' regular_completions
+        fi
+        if [[ -n $tilde_completions ]]; then
+            compadd -Q -a tilde_completions
+        fi
     fi
 }
 
@@ -258,6 +272,12 @@ function _clap_dynamic_completer_sandbox() {
     # For everything else (actions, flags, command names), use clap's completion
     _clap_dynamic_completer_sandbox_base
 }
+
+# Ensure functions are available before registering
+if (( ! $+functions[_clap_dynamic_completer_sandbox] )); then
+    # This shouldn't happen, but just in case
+    return 1
+fi
 
 compdef _clap_dynamic_completer_sandbox sandbox
 COMPLETION_SCRIPT

@@ -334,25 +334,65 @@ pub fn changed_file_completion(
         uid_gid_home.gid,
     );
 
-    // ✅ OPTIMIZATION: Only scan files in the current directory's mount point
-    // This dramatically reduces the number of files examined for completion
-    let changes = match sandbox.changes_in_directory(&cwd, config.ignored) {
-        Ok(changes) => changes,
+    // Resolve the typed prefix to the directory to scan in the overlay.
+    // For ~/foo, scan ~; for /tmp/foo, scan /tmp; for foo, scan cwd.
+    let home_dir = uid_gid_home.home.clone();
+    let scan_dir = if current_str.starts_with("~/") || current_str == "~" {
+        home_dir.clone()
+    } else if current_str.starts_with('/') {
+        let abs_path = std::path::PathBuf::from(current_str);
+        abs_path
+            .parent()
+            .unwrap_or(std::path::Path::new("/"))
+            .to_path_buf()
+    } else {
+        cwd.clone()
+    };
+
+    // Fast shallow listing — just read_dir on the overlay upper directory,
+    // no recursion or full change analysis needed for completion.
+    let names = match sandbox.changed_names_in_directory(&scan_dir) {
+        Ok(names) => names,
         Err(_) => return completions,
     };
 
-    // Extract destination paths from changes and make them relative to cwd
-    for change in changes.iter() {
-        let path = &change.destination;
+    // Format an absolute overlay path as a display string matching the user's input style
+    let format_path = |path: &std::path::Path| -> Option<String> {
+        if current_str.starts_with("~/") || current_str == "~" {
+            path.strip_prefix(&home_dir)
+                .ok()
+                .map(|rel| format!("~/{}", rel.to_string_lossy()))
+        } else if current_str.starts_with('/') {
+            Some(path.to_string_lossy().to_string())
+        } else {
+            path.strip_prefix(&cwd)
+                .ok()
+                .map(|rel| rel.to_string_lossy().to_string())
+        }
+    };
 
-        // Make path relative to cwd
-        let display_path = match path.strip_prefix(&cwd) {
-            Ok(relative) => relative.to_string_lossy().to_string(),
-            Err(_) => continue, // Skip files not in cwd (shouldn't happen with filtered scan)
-        };
+    // Filter to entries matching the typed prefix
+    let mut matches: Vec<std::path::PathBuf> = names
+        .into_iter()
+        .filter(|path| {
+            format_path(path)
+                .map(|dp| dp.starts_with(current_str))
+                .unwrap_or(false)
+        })
+        .collect();
 
-        // Filter by current prefix
-        if display_path.starts_with(current_str) {
+    // Drill down through single-entry directories — standard shell completion
+    // behavior where if there's only one match and it's a directory, we recurse
+    // into it until there are multiple choices or we hit a file.
+    while matches.len() == 1 && sandbox.is_changed_directory(&matches[0]) {
+        match sandbox.changed_names_in_directory(&matches[0]) {
+            Ok(children) if !children.is_empty() => matches = children,
+            _ => break,
+        }
+    }
+
+    for path in &matches {
+        if let Some(display_path) = format_path(path) {
             completions.push(CompletionCandidate::new(display_path));
         }
     }
