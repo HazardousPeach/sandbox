@@ -425,20 +425,18 @@ pub fn accept(
         }
 
         if final_accepted_count > 0 {
-            outln!("\n{} changes accepted\n", final_accepted_count);
+            outln!("{} changes accepted", final_accepted_count);
         }
     } else {
-        outln!("\nNo changes in this directory to accept\n");
+        outln!("No changes in this directory to accept");
     }
 
     if non_matching_count > 0 {
         outln!(
-            "\n{} external or non-matching not accepted\n",
+            "{} external or non-matching not accepted",
             non_matching_count
         );
     }
-
-    outln!("\n");
 
     sync_and_drop_caches()?;
 

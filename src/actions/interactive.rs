@@ -62,7 +62,7 @@ pub fn accept_interactive(
     let changes = all_changes.matching(&cwd, patterns);
 
     if changes.is_empty() {
-        outln!("\nNo changes in this directory to accept\n");
+        outln!("No changes in this directory to accept");
         return Ok(());
     }
 
@@ -70,7 +70,7 @@ pub fn accept_interactive(
     let file_hunks_list = changes_to_file_hunks(changes.iter())?;
 
     if file_hunks_list.is_empty() {
-        outln!("\nNo text changes available for interactive selection\n");
+        outln!("No text changes available for interactive selection");
         return Ok(());
     }
 
@@ -97,7 +97,7 @@ pub fn reject_interactive(
     let changes = all_changes.matching(&cwd, patterns);
 
     if changes.is_empty() {
-        outln!("\nNo changes in this directory to reject\n");
+        outln!("No changes in this directory to reject");
         return Ok(());
     }
 
@@ -105,7 +105,7 @@ pub fn reject_interactive(
     let file_hunks_list = changes_to_file_hunks(changes.iter())?;
 
     if file_hunks_list.is_empty() {
-        outln!("\nNo text changes available for interactive selection\n");
+        outln!("No text changes available for interactive selection");
         return Ok(());
     }
 
@@ -762,9 +762,9 @@ fn apply_accept_selections(
     }
 
     if accepted_count > 0 {
-        outln!("\n{} files with changes accepted\n", accepted_count);
+        outln!("{} files with changes accepted", accepted_count);
     } else {
-        outln!("\nNo changes accepted\n");
+        outln!("No changes accepted");
     }
 
     Ok(())

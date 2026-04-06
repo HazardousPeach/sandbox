@@ -38,7 +38,7 @@ pub fn status(
             true
         }
     }) {
-        outln!("\nMatching changes:");
+        outln!("Matching changes:");
         changes.sort_by(by_destination);
         changes
             .iter()
@@ -87,16 +87,14 @@ pub fn status(
                 Ok(())
             })?;
     } else {
-        outln!("\nNo matching changes");
+        outln!("No matching changes");
     }
 
     set_json_output("changes", &json!(json_output));
 
     if non_matching_count > 0 {
-        outln!("\n{} external or non-matching changes", non_matching_count);
+        outln!("{} external or non-matching changes", non_matching_count);
     }
-
-    outln!("\n");
 
     Ok(())
 }
