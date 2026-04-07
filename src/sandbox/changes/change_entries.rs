@@ -8,6 +8,8 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
     cmp::Ordering,
+    fs::File,
+    io::{BufReader, Read},
     path::{Path, PathBuf},
 };
 
@@ -157,10 +159,9 @@ impl ChangeEntry {
     }
 
     /* In the case of a Set(Modify) operation, this will check to see if the source and staged
-     * paths differ in meaningful ways. If the paths are not both directories, or for all other
-     * operations, we simply return true for the time being. Future changes
-     * might refine this, but for now we are mainly concerned with filtering
-     * out unchanged directory nodes to eliminate that clutter from the status output.
+     * paths differ in meaningful ways. For directories, we check metadata (uid, gid, mode).
+     * For regular files, we also compare sizes and file contents to detect spurious
+     * OverlayFS copy-ups (files opened for writing but not actually modified).
      */
     pub fn is_actually_modified(&self) -> bool {
         if let EntryOperation::Set(SetType::Modify) = &self.operation {
@@ -194,12 +195,58 @@ impl ChangeEntry {
                         return true;
                     }
 
-                    return !staged.is_dir();
+                    if staged.is_dir() {
+                        return false;
+                    }
+
+                    if staged.is_file() && source.is_file() {
+                        if staged.stat.st_size != source.stat.st_size {
+                            debug!(
+                                "{}: size changed from {} to {}",
+                                self.destination.display(),
+                                source.stat.st_size,
+                                staged.stat.st_size
+                            );
+                            return true;
+                        }
+                        return !files_have_equal_contents(
+                            &staged.path,
+                            &source.path,
+                        );
+                    }
+
+                    return true;
                 }
             }
         }
 
         true
+    }
+}
+
+fn files_have_equal_contents(a: &Path, b: &Path) -> bool {
+    let (Ok(fa), Ok(fb)) = (File::open(a), File::open(b)) else {
+        return false;
+    };
+    let mut ra = BufReader::new(fa);
+    let mut rb = BufReader::new(fb);
+    let mut buf_a = [0u8; 8192];
+    let mut buf_b = [0u8; 8192];
+    loop {
+        let na = match ra.read(&mut buf_a) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        let nb = match rb.read(&mut buf_b) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        if na != nb || buf_a[..na] != buf_b[..nb] {
+            return false;
+        }
+        if na == 0 {
+            return true;
+        }
     }
 }
 

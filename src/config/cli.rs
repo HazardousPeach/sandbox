@@ -252,7 +252,10 @@ pub fn sandbox_name_completion(
         return completions;
     };
 
-    let cli: Args = Args::parse();
+    let cli: Args = match Args::try_parse() {
+        Ok(cli) => cli,
+        Err(_) => return completions,
+    };
     let config = match resolve_config(cli.clone()) {
         Ok(config) => config,
         Err(_) => return completions,
@@ -297,6 +300,16 @@ pub fn sandbox_name_completion(
 pub fn changed_file_completion(
     current: &std::ffi::OsStr,
 ) -> Vec<CompletionCandidate> {
+    let mut completions = vec![];
+    let Some(current_str) = current.to_str() else {
+        return completions;
+    };
+
+    let cli: Args = match Args::try_parse() {
+        Ok(cli) => cli,
+        Err(_) => return completions,
+    };
+
     let uid_gid_home = match resolve_uid_gid_home() {
         Ok(ugh) => {
             if drop_privileges(ugh.uid, ugh.gid).is_err() {
@@ -307,12 +320,6 @@ pub fn changed_file_completion(
         Err(_) => return vec![],
     };
 
-    let mut completions = vec![];
-    let Some(current_str) = current.to_str() else {
-        return completions;
-    };
-
-    let cli: Args = Args::parse();
     let config = match resolve_config(cli.clone()) {
         Ok(config) => config,
         Err(_) => return completions,
