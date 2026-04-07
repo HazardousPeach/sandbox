@@ -424,7 +424,12 @@ fn run_interactive_session(
 /// Read a single command from stdin
 fn read_command() -> Result<Option<InteractiveCommand>> {
     let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
+    let bytes_read = io::stdin().read_line(&mut input)?;
+
+    // EOF — treat as quit to avoid spinning forever
+    if bytes_read == 0 {
+        return Ok(Some(InteractiveCommand::Quit));
+    }
 
     let trimmed = input.trim();
     if trimmed.is_empty() {
