@@ -292,14 +292,14 @@ install: build/sandbox.1.gz completion-scripts
 	sudo chmod u+s "$$INSTALL_DIR/sandbox"
 	sudo cp build/sandbox.1.gz /usr/share/man/man1/sandbox.1.gz
 	sudo cp build/sandbox-bash-completion /usr/share/bash-completion/completions/sandbox
-	sudo cp build/sandbox-zsh-completion /usr/share/zsh/site-functions/_sandbox
+	sudo cp build/sandbox-zsh-completion /usr/share/zsh/vendor-completions/_sandbox
 	sudo cp build/sandbox-fish-completion /usr/share/fish/vendor_completions.d/sandbox.fish
 	
 uninstall:
 	sudo rm -f /usr/bin/sandbox \
 	   /usr/share/man/man1/sandbox.1.gz \
 	   /usr/share/bash-completion/completions/sandbox \
-	   /usr/share/zsh/site-functions/_sandbox \
+	   /usr/share/zsh/vendor-completions/_sandbox \
 	   /usr/share/fish/vendor_completions.d/sandbox.fish
 	
 		

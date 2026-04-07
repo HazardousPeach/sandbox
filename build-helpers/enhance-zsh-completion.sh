@@ -86,9 +86,9 @@ _sandbox_files() {
     completions_raw=$(_sandbox_file_completions "$_sandbox_completion_flags" "$current_word" "files")
 
     if [[ -n "$completions_raw" ]]; then
-        local -a completions
+        local -a completions expl
         completions=(${(f)completions_raw})
-        compadd -a completions
+        _wanted files expl file compadd -a completions
         return 0
     fi
     return 1
@@ -100,9 +100,9 @@ _sandbox_directories() {
     completions_raw=$(_sandbox_file_completions "$_sandbox_completion_flags" "$current_word" "dirs")
 
     if [[ -n "$completions_raw" ]]; then
-        local -a completions
+        local -a completions expl
         completions=(${(f)completions_raw})
-        compadd -a completions
+        _wanted directories expl directory compadd -a completions
         return 0
     fi
     return 1
