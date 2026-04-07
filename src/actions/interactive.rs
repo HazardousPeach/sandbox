@@ -825,23 +825,24 @@ fn apply_reject_selections(
     Ok(())
 }
 
-/// Accept a whole file by copying from staged to destination
+/// Accept a whole file by moving from staged to destination, falling back to copy
 fn accept_whole_file(change: &ChangeEntry) -> Result<()> {
     if let Some(staged) = &change.staged {
         let dest = &change.destination;
 
-        // Copy file
-        fs::copy(&staged.path, dest).context(format!(
-            "Failed to copy {} to {}",
-            staged.path.display(),
-            dest.display()
-        ))?;
-
-        // Set permissions
-        set_file_permissions(dest, staged)?;
-
-        // Remove staged file
-        fs::remove_file(&staged.path).ok();
+        // Try a direct rename first (instant if same filesystem),
+        // fall back to copy + remove for cross-device moves.
+        if fs::rename(&staged.path, dest).is_ok() {
+            set_file_permissions(dest, staged)?;
+        } else {
+            fs::copy(&staged.path, dest).context(format!(
+                "Failed to copy {} to {}",
+                staged.path.display(),
+                dest.display()
+            ))?;
+            set_file_permissions(dest, staged)?;
+            fs::remove_file(&staged.path).ok();
+        }
     }
     Ok(())
 }

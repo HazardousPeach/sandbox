@@ -309,15 +309,23 @@ pub fn accept(
 
                             if staged.is_file() {
                                 if !pretend {
-                                    let extension =
-                                        uuid::Uuid::new_v4().to_string();
-                                    let tmp_path =
-                                        destination.with_extension(extension);
-                                    cp(&staged.path, &tmp_path)?;
-                                    mv(&tmp_path, destination)?;
-                                    set_permissions(destination, staged)?;
-                                    deferred_stage_removals
-                                        .push(staged.path.clone());
+                                    // Try a direct rename first (instant if same filesystem),
+                                    // fall back to copy-then-rename for cross-device moves.
+                                    if fs::rename(&staged.path, destination)
+                                        .is_ok()
+                                    {
+                                        set_permissions(destination, staged)?;
+                                    } else {
+                                        let extension =
+                                            uuid::Uuid::new_v4().to_string();
+                                        let tmp_path =
+                                            destination.with_extension(extension);
+                                        cp(&staged.path, &tmp_path)?;
+                                        mv(&tmp_path, destination)?;
+                                        set_permissions(destination, staged)?;
+                                        deferred_stage_removals
+                                            .push(staged.path.clone());
+                                    }
                                 }
                             } else if staged.is_symlink() {
                                 if !pretend {
