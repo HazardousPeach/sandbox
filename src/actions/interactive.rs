@@ -822,9 +822,9 @@ fn apply_reject_selections(
     }
 
     if rejected_count > 0 {
-        outln!("\n{} files with changes rejected\n", rejected_count);
+        outln!("{} files with changes rejected", rejected_count);
     } else {
-        outln!("\nNo changes rejected\n");
+        outln!("No changes rejected");
     }
 
     Ok(())
