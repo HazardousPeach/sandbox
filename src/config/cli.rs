@@ -342,10 +342,14 @@ pub fn changed_file_completion(
     );
 
     // Resolve the typed prefix to the directory to scan in the overlay.
-    // For ~/foo, scan ~; for /tmp/foo, scan /tmp; for foo, scan cwd.
+    // For ~/foo/bar, scan ~/foo; for /tmp/foo, scan /tmp; for subdir/foo, scan cwd/subdir.
     let home_dir = uid_gid_home.home.clone();
     let scan_dir = if current_str.starts_with("~/") || current_str == "~" {
-        home_dir.clone()
+        let expanded = home_dir.join(&current_str[2..]);
+        expanded
+            .parent()
+            .unwrap_or(&home_dir)
+            .to_path_buf()
     } else if current_str.starts_with('/') {
         let abs_path = std::path::PathBuf::from(current_str);
         abs_path
@@ -353,7 +357,11 @@ pub fn changed_file_completion(
             .unwrap_or(std::path::Path::new("/"))
             .to_path_buf()
     } else {
-        cwd.clone()
+        let abs_path = cwd.join(current_str);
+        abs_path
+            .parent()
+            .unwrap_or(&cwd)
+            .to_path_buf()
     };
 
     // Fast shallow listing — just read_dir on the overlay upper directory,
