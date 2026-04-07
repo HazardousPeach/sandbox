@@ -16,10 +16,11 @@ fn test_accept_patch_changes_visible_inside_sandbox(
 ) -> Result<()> {
     let filename = sandbox.test_filename("inside-sandbox-test.txt");
 
-    // Create original file with multiple lines
+    // Create original file with enough context lines between changes to
+    // produce two separate hunks (need >6 unchanged lines between changes)
     std::fs::write(
         &filename,
-        "line1\noriginal_line2\nline3\noriginal_line4\nline5\n",
+        "line1\noriginal_line2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\noriginal_line11\nline12\n",
     )?;
 
     // Modify inside sandbox - change two separate lines (two hunks)
@@ -27,19 +28,19 @@ fn test_accept_patch_changes_visible_inside_sandbox(
         "sh",
         "-c",
         &format!(
-            "echo 'line1\nmodified_line2\nline3\nmodified_line4\nline5' > {}",
+            "echo 'line1\nmodified_line2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\nmodified_line11\nline12' > {}",
             filename
         ),
     ])?;
 
     // Verify both changes are visible inside sandbox before accept
-    sandbox.run(&["run", "cat", &filename])?;
+    sandbox.run(&["cat", &filename])?;
     assert!(
         sandbox.last_stdout.contains("modified_line2"),
         "Before accept: sandbox should show first change"
     );
     assert!(
-        sandbox.last_stdout.contains("modified_line4"),
+        sandbox.last_stdout.contains("modified_line11"),
         "Before accept: sandbox should show second change"
     );
 
@@ -49,7 +50,7 @@ fn test_accept_patch_changes_visible_inside_sandbox(
 
     // CRITICAL TEST: Check that BOTH changes are still visible INSIDE the sandbox
     // This is where the bug was - the accepted change would disappear from upper
-    sandbox.run(&["run", "cat", &filename])?;
+    sandbox.run(&["cat", &filename])?;
     let inside_sandbox = sandbox.last_stdout.clone();
 
     println!("Content inside sandbox after partial accept:");
@@ -64,8 +65,8 @@ fn test_accept_patch_changes_visible_inside_sandbox(
     );
 
     assert!(
-        inside_sandbox.contains("modified_line4"),
-        "Unaccepted change (modified_line4) should still be visible inside sandbox.\n\
+        inside_sandbox.contains("modified_line11"),
+        "Unaccepted change (modified_line11) should still be visible inside sandbox.\n\
          Inside sandbox content: {}",
         inside_sandbox
     );
@@ -81,13 +82,13 @@ fn test_accept_patch_changes_visible_inside_sandbox(
     );
 
     assert!(
-        !outside_content.contains("modified_line4"),
-        "Host filesystem should NOT have unaccepted change (modified_line4)"
+        !outside_content.contains("modified_line11"),
+        "Host filesystem should NOT have unaccepted change (modified_line11)"
     );
 
     assert!(
-        outside_content.contains("original_line4"),
-        "Host filesystem should still have original_line4 (not modified)"
+        outside_content.contains("original_line11"),
+        "Host filesystem should still have original_line11 (not modified)"
     );
 
     // Verify status shows only the remaining unaccepted change
@@ -125,7 +126,7 @@ fn test_accept_patch_all_hunks_removes_upper(
         "Host should have accepted change"
     );
 
-    sandbox.run(&["run", "cat", &filename])?;
+    sandbox.run(&["cat", &filename])?;
     assert!(
         sandbox.last_stdout.contains("modified"),
         "Sandbox should see accepted change"
@@ -166,7 +167,7 @@ fn test_accept_patch_sequential_partial_accepts(
     sandbox.run_with_stdin(&["accept", "-p", &filename], "y\nq\n")?;
 
     // Verify all changes still visible inside
-    sandbox.run(&["run", "cat", &filename])?;
+    sandbox.run(&["cat", &filename])?;
     let inside1 = sandbox.last_stdout.clone();
     assert!(
         inside1.contains("changed1"),
@@ -185,7 +186,7 @@ fn test_accept_patch_sequential_partial_accepts(
     sandbox.run_with_stdin(&["accept", "-p", &filename], "y\nq\n")?;
 
     // Verify all changes still visible inside
-    sandbox.run(&["run", "cat", &filename])?;
+    sandbox.run(&["cat", &filename])?;
     let inside2 = sandbox.last_stdout.clone();
     assert!(
         inside2.contains("changed1"),
@@ -204,7 +205,7 @@ fn test_accept_patch_sequential_partial_accepts(
     sandbox.run_with_stdin(&["accept", "-p", &filename], "y\n")?;
 
     // Verify all changes visible inside and outside
-    sandbox.run(&["run", "cat", &filename])?;
+    sandbox.run(&["cat", &filename])?;
     assert!(sandbox.last_stdout.contains("changed1"));
     assert!(sandbox.last_stdout.contains("changed3"));
     assert!(sandbox.last_stdout.contains("changed5"));
