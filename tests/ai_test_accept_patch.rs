@@ -121,7 +121,7 @@ fn test_accept_patch_all_remaining(mut sandbox: SandboxManager) -> Result<()> {
     ])?;
 
     // Accept with -p flag, answering 'a' to accept all remaining in file
-    sandbox.run_with_stdin(&["accept", "-p"], "a\n")?;
+    sandbox.run_with_stdin(&["accept", "-p", &filename], "a\n")?;
 
     // Verify all changes were accepted
     let content = std::fs::read_to_string(&filename)?;

@@ -19,9 +19,17 @@ fn test_changes_in_directory_filters_correctly(
     std::fs::create_dir(&dir_b)?;
     std::fs::write(format!("{}/file2.txt", dir_b), "content2")?;
 
-    // Now modify them inside the sandbox
-    sandbox.run(&["touch", &format!("{}/file1.txt", dir_a)])?;
-    sandbox.run(&["touch", &format!("{}/file2.txt", dir_b)])?;
+    // Actually modify content inside the sandbox
+    sandbox.run(&[
+        "sh",
+        "-c",
+        &format!("echo modified > {}/file1.txt", dir_a),
+    ])?;
+    sandbox.run(&[
+        "sh",
+        "-c",
+        &format!("echo modified > {}/file2.txt", dir_b),
+    ])?;
 
     // Check status of just dir_a
     sandbox.run(&["status", &dir_a])?;
@@ -65,10 +73,22 @@ fn test_changes_with_nested_directories(
     std::fs::create_dir(format!("{}/subdir1", base_dir))?;
     std::fs::create_dir(format!("{}/subdir2", base_dir))?;
 
-    // Modify files in sandbox
-    sandbox.run(&["touch", &format!("{}/file1.txt", base_dir)])?;
-    sandbox.run(&["touch", &format!("{}/subdir1/file2.txt", base_dir)])?;
-    sandbox.run(&["touch", &format!("{}/subdir2/file3.txt", base_dir)])?;
+    // Actually modify files in sandbox (create new files)
+    sandbox.run(&[
+        "sh",
+        "-c",
+        &format!("echo new > {}/file1.txt", base_dir),
+    ])?;
+    sandbox.run(&[
+        "sh",
+        "-c",
+        &format!("echo new > {}/subdir1/file2.txt", base_dir),
+    ])?;
+    sandbox.run(&[
+        "sh",
+        "-c",
+        &format!("echo new > {}/subdir2/file3.txt", base_dir),
+    ])?;
 
     // Check status for the entire base directory
     sandbox.run(&["status", &base_dir])?;
@@ -112,9 +132,17 @@ fn test_completion_uses_filtered_scan(mut sandbox: SandboxManager) -> Result<()>
         std::fs::write(format!("{}/other_{}.txt", dir2, i), "content")?;
     }
 
-    // Modify them in sandbox
-    sandbox.run(&["sh", "-c", &format!("touch {}/*.txt", dir1)])?;
-    sandbox.run(&["sh", "-c", &format!("touch {}/*.txt", dir2)])?;
+    // Modify content in sandbox
+    sandbox.run(&[
+        "sh",
+        "-c",
+        &format!("for f in {}/*.txt; do echo modified > \"$f\"; done", dir1),
+    ])?;
+    sandbox.run(&[
+        "sh",
+        "-c",
+        &format!("for f in {}/*.txt; do echo modified > \"$f\"; done", dir2),
+    ])?;
 
     // Time the status check for dir1 only
     let start = std::time::Instant::now();
@@ -172,8 +200,15 @@ fn test_does_not_scan_sibling_directories(
         )?;
     }
 
-    // Modify them in sandbox
-    sandbox.run(&["sh", "-c", &format!("touch {}/*/*.txt", base)])?;
+    // Modify content in sandbox
+    sandbox.run(&[
+        "sh",
+        "-c",
+        &format!(
+            "for f in {}/*/*.txt; do echo modified > \"$f\"; done",
+            base
+        ),
+    ])?;
 
     // Time status check for project_a only
     let start = std::time::Instant::now();
@@ -201,6 +236,29 @@ fn test_does_not_scan_sibling_directories(
         elapsed.as_millis() < 500,
         "Status took too long: {:?} - may be scanning sibling directories",
         elapsed
+    );
+
+    Ok(())
+}
+
+#[rstest]
+fn test_touch_only_is_not_shown_in_status(
+    mut sandbox: SandboxManager,
+) -> Result<()> {
+    // Touch only updates mtime, not content. Since we follow git's model
+    // of only tracking content and mode changes, touch-only modifications
+    // (spurious OverlayFS copy-ups) should be pruned from status.
+    let file = sandbox.test_filename("touched.txt");
+    std::fs::write(&file, "original content")?;
+
+    // Touch the file inside the sandbox (updates mtime only)
+    sandbox.run(&["touch", &file])?;
+
+    sandbox.run(&["status"])?;
+    assert!(
+        !sandbox.last_stdout.contains("touched"),
+        "Touch-only file should not appear in status. Got: {}",
+        sandbox.last_stdout
     );
 
     Ok(())

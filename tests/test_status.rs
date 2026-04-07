@@ -58,14 +58,21 @@ fn test_status(mut sandbox: SandboxManager) -> Result<()> {
 #[rstest]
 fn test_status_outside(mut sandbox: SandboxManager) -> Result<()> {
     let filename = "/tmp/test";
-    sandbox.run(&["touch", filename])?;
+    std::fs::write(filename, "original")?;
+    sandbox.run(&[
+        "bash",
+        "-c",
+        &format!("echo modified > {}", filename),
+    ])?;
+    // When scanning from cwd (no patterns), changes outside cwd are not reported
     sandbox.run(&["status"])?;
     println!("{}", sandbox.last_stdout);
     assert!(
-        sandbox
-            .last_stdout
-            .contains("external or non-matching changes")
+        !sandbox.last_stdout.contains(filename),
+        "Changes outside cwd should not appear in unscoped status"
     );
+
+    // When scanning from /, the change should appear as a matching change
     sandbox.run(&["status", "/", filename])?;
     println!("{}", sandbox.last_stdout);
     assert!(sandbox.last_stdout.contains("Matching changes"));
@@ -76,7 +83,12 @@ fn test_status_outside(mut sandbox: SandboxManager) -> Result<()> {
 #[rstest]
 fn test_status_no_matching_changes(mut sandbox: SandboxManager) -> Result<()> {
     let filename = "/tmp/test";
-    sandbox.run(&["touch", filename])?;
+    std::fs::write(filename, "original")?;
+    sandbox.run(&[
+        "bash",
+        "-c",
+        &format!("echo modified > {}", filename),
+    ])?;
     sandbox.run(&["status", "not-the-file-name"])?;
     assert!(sandbox.last_stdout.contains("No matching changes"));
     Ok(())

@@ -20,7 +20,7 @@ to track file changes and allows selective acceptance of modifications.
 
 ### Testing
 
--   `make test` - Run all tests with coverage (requires sudo)
+-   `make test` - Run all tests with coverage
 -   `TEST=test_name make quick-test` - Run specific test(s)
 -   `make full-test` - Run comprehensive VM-based tests (requires VM setup)
 -   `make coverage-report` - Generate and view coverage report at coverage/html/index.html
