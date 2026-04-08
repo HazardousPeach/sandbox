@@ -213,6 +213,7 @@ impl Sandbox {
         directory_filter: Option<&Path>,
     ) -> Result<ChangeEntries> {
         let mut change_entries: Vec<ChangeEntry> = Vec::new();
+        let mut opaque_ancestor_cache: HashMap<PathBuf, bool> = HashMap::new();
 
         /* Files that are moved (and not re-created) will have a corresponding deleted indicator in
          * the upper file system and the file it was moved to will have a corresponding renamed
@@ -237,9 +238,6 @@ impl Sandbox {
 
         /* Second pass to build the list of changes */
         for entry in &upper_entries {
-            let upper_file_details = FileDetails::from_path(&entry.upper_path)?
-                .context("Failed to get file details for upper path")?;
-
             let source_is_dir = match &entry.source_path {
                 Some(source_path) => source_path.is_dir(),
                 None => false,
@@ -299,7 +297,7 @@ impl Sandbox {
             }
 
             if !entry.upper_details.is_removed() {
-                if upper_file_details.is_renamed()?.is_some() {
+                if entry.upper_details.is_renamed()?.is_some() {
                     if entry.source_details.is_none() {
                         info!(
                             "entry: {} {:?}",
@@ -340,7 +338,7 @@ impl Sandbox {
                                 ChangeError::UnsupportedFileType,
                             ),
                             source: entry.source_details.clone(),
-                            staged: Some(upper_file_details.clone()),
+                            staged: Some(entry.upper_details.clone()),
                             tmp_path: None,
                         });
                     } else {
@@ -349,7 +347,7 @@ impl Sandbox {
                             destination: entry.lower_path.clone(),
                             operation: EntryOperation::Set(
                                 if entry.source_details.is_some()
-                                    && !has_opaque_ancestor(&entry.upper_path)
+                                    && !has_opaque_ancestor(&entry.upper_path, &mut opaque_ancestor_cache)
                                 {
                                     SetType::Modify
                                 } else {
@@ -357,7 +355,7 @@ impl Sandbox {
                                 },
                             ),
                             source: entry.source_details.clone(),
-                            staged: Some(upper_file_details.clone()),
+                            staged: Some(entry.upper_details.clone()),
                             tmp_path: None,
                         });
                     }
@@ -447,6 +445,8 @@ impl Sandbox {
         directory_filter: Option<&Path>,
     ) -> Result<Vec<UpperEntry>> {
         let mut resolved_ignores: HashMap<PathBuf, Vec<IgnorePattern>> =
+            HashMap::new();
+        let mut dir_source_cache: HashMap<PathBuf, Option<PathBuf>> =
             HashMap::new();
         let mut ret = Vec::new();
 
@@ -551,21 +551,24 @@ impl Sandbox {
                     upper_path.push(component);
                 }
 
+                let upper_details = FileDetails::from_path(&upper_path)?.context(
+                    "Failed to get file details for upper path (something is very wrong)",
+                )?;
+
                 /* Note, get_source_lower_path_for_upper_path deals with following redirects */
                 let source_path = get_source_lower_path_for_upper_path(
                     &upper_path,
                     &upper_root,
                     &lower_path,
                     &PathBuf::from(base_decoded.clone()),
+                    &upper_details,
+                    &mut dir_source_cache,
                 )?;
 
                 let source_details = match &source_path {
                     Some(source_path) => FileDetails::from_path(source_path)?,
                     None => None,
                 };
-                let upper_details = FileDetails::from_path(&upper_path)?.context(
-                    "Failed to get file details for upper path (something is very wrong)",
-                )?;
 
                 ret.push(UpperEntry {
                     lower_path,
@@ -773,105 +776,165 @@ pub fn by_staged_descending(a: &ChangeEntry, b: &ChangeEntry) -> Ordering {
         (None, None) => b.destination.cmp(&a.destination),
     }
 }
-/* Resolves the source path for a given upper path. This deals with following redirects.
- * for the given path, or an ancestor path. */
+/* Resolves the source path for a given upper path. This deals with following redirects
+ * for the given path, or an ancestor path.
+ *
+ * Uses upper_details (already computed by the caller) to avoid a redundant stat on the
+ * file, and dir_source_cache to avoid re-walking ancestor directories for siblings. */
 fn get_source_lower_path_for_upper_path(
     upper_path: &Path,
     upper_root: &Path,
     lower_path: &Path,
     lower_root: &Path,
+    upper_details: &FileDetails,
+    dir_source_cache: &mut HashMap<PathBuf, Option<PathBuf>>,
 ) -> Result<Option<PathBuf>> {
-    /* We're going to walk backwards from our path looking for any redirects along the way. We'll
-     * store the path components's we've popped off the back and once we bottom out at a mount
-     * point or a redirect we'll join them back together. If that corresponding path exists on the
-     * lower filesystem we'll return it, otherwise we'll return None. */
-
-    let mut components = PathBuf::new();
-    let mut cur_upper = upper_path.to_path_buf();
-    let mut cur_lower = lower_path.to_path_buf();
-
-    while let Some(cur_details) = FileDetails::from_path(&cur_upper)? {
-        if cur_upper == *upper_root {
-            // bottomed out at the mount point, no redirect found
-            break;
-        }
-
-        if let Some(xattr_path) = cur_details.is_renamed()? {
-            // Found a redirect. Add the components we've built up to the path
-            // found in the xattr for our (potential) source path.
-            components = match components.is_empty() {
-                true => PathBuf::from(&xattr_path),
-                false => PathBuf::from(&xattr_path).join(components),
-            };
-            let is_relative_to_mount_point = xattr_path.starts_with("/");
-
-            components = if is_relative_to_mount_point {
-                find_mount_point(cur_lower.clone())?
-                    .join(components.strip_prefix("/").unwrap_or(&components))
-            } else {
-                let lower_parent = cur_lower.parent().context(format!(
-                    "Failed to get parent for {}",
-                    cur_lower.display()
-                ))?;
-
-                lower_parent.join(components)
-            };
-
-            if components.exists() {
-                return Ok(Some(components));
-            } else {
-                return Ok(None);
-            }
-        }
-
-        // otherwise no redirect found here, try the parent
-        let cur_trailing_component = cur_upper.file_name().context(format!(
-            "Failed to get trailing component for {}",
-            cur_upper.display()
-        ))?;
-
-        let upper_parent = cur_upper.parent().context(format!(
-            "Failed to get parent for {}",
-            cur_upper.display()
-        ))?;
-
-        let lower_parent = cur_lower.parent().context(format!(
-            "Failed to get parent for {}",
-            cur_lower.display()
-        ))?;
-
-        components = match components.is_empty() {
-            true => PathBuf::from(cur_trailing_component),
-            false => PathBuf::from(cur_trailing_component).join(components),
+    // Check if the file itself has a redirect (file-level rename)
+    if let Some(xattr_path) = upper_details.is_renamed()? {
+        let is_relative_to_mount_point = xattr_path.starts_with("/");
+        let resolved = if is_relative_to_mount_point {
+            find_mount_point(lower_path.to_path_buf())?
+                .join(PathBuf::from(&xattr_path).strip_prefix("/").unwrap_or(&PathBuf::from(&xattr_path)))
+        } else {
+            let lower_parent = lower_path.parent().context(format!(
+                "Failed to get parent for {}",
+                lower_path.display()
+            ))?;
+            lower_parent.join(&xattr_path)
         };
-
-        cur_upper = PathBuf::from(upper_parent);
-        cur_lower = PathBuf::from(lower_parent);
+        return Ok(if resolved.exists() { Some(resolved) } else { None });
     }
 
-    components = lower_root.join(components);
+    // No file-level redirect. Resolve via parent directory (cached).
+    let upper_parent = match upper_path.parent() {
+        Some(p) => p,
+        None => {
+            return Ok(if lower_path.exists() { Some(lower_path.to_path_buf()) } else { None });
+        }
+    };
+    let lower_parent = match lower_path.parent() {
+        Some(p) => p,
+        None => {
+            return Ok(if lower_path.exists() { Some(lower_path.to_path_buf()) } else { None });
+        }
+    };
 
-    if components.exists() {
-        Ok(Some(components))
-    } else {
-        Ok(None)
+    let source_dir = resolve_directory_source(
+        upper_parent,
+        upper_root,
+        lower_parent,
+        lower_root,
+        dir_source_cache,
+    )?;
+
+    match source_dir {
+        Some(dir) => {
+            let filename = upper_path.file_name().context(format!(
+                "Failed to get filename for {}",
+                upper_path.display()
+            ))?;
+            let source = dir.join(filename);
+            Ok(if source.exists() { Some(source) } else { None })
+        }
+        None => Ok(None),
     }
 }
 
-fn has_opaque_ancestor(path: &Path) -> bool {
-    let mut current = path.to_path_buf();
-    while let Some(parent) = current.parent() {
-        let parent = PathBuf::from(parent);
-        if let Ok(Some(details)) = FileDetails::from_path(&parent) {
-            if details.is_opaque() {
-                return true;
-            }
-        } else {
-            return false;
-        }
-        current = parent;
+/* Recursively resolves the source directory for an upper directory path,
+ * caching results so sibling files don't repeat the ancestor walk. */
+fn resolve_directory_source(
+    upper_dir: &Path,
+    upper_root: &Path,
+    lower_dir: &Path,
+    lower_root: &Path,
+    cache: &mut HashMap<PathBuf, Option<PathBuf>>,
+) -> Result<Option<PathBuf>> {
+    // At mount root: source is lower_root
+    if upper_dir == upper_root {
+        return Ok(Some(lower_root.to_path_buf()));
     }
-    false
+
+    // Check cache
+    if let Some(cached) = cache.get(upper_dir) {
+        return Ok(cached.clone());
+    }
+
+    // Check if this directory has a redirect xattr
+    if let Some(dir_details) = FileDetails::from_path(&upper_dir.to_path_buf())? {
+        if let Some(xattr_path) = dir_details.is_renamed()? {
+            let is_relative_to_mount_point = xattr_path.starts_with("/");
+            let resolved = if is_relative_to_mount_point {
+                find_mount_point(lower_dir.to_path_buf())?
+                    .join(PathBuf::from(&xattr_path).strip_prefix("/").unwrap_or(&PathBuf::from(&xattr_path)))
+            } else {
+                let parent = lower_dir.parent().context(format!(
+                    "Failed to get parent for {}",
+                    lower_dir.display()
+                ))?;
+                parent.join(&xattr_path)
+            };
+            let result = if resolved.exists() { Some(resolved) } else { None };
+            cache.insert(upper_dir.to_path_buf(), result.clone());
+            return Ok(result);
+        }
+    }
+
+    // No redirect on this directory. Resolve parent, then append our dirname.
+    let upper_parent = upper_dir.parent().context(format!(
+        "Failed to get parent for {}",
+        upper_dir.display()
+    ))?;
+    let lower_parent = lower_dir.parent().context(format!(
+        "Failed to get parent for {}",
+        lower_dir.display()
+    ))?;
+
+    let parent_source = resolve_directory_source(
+        upper_parent,
+        upper_root,
+        lower_parent,
+        lower_root,
+        cache,
+    )?;
+
+    let result = match parent_source {
+        Some(parent_src) => {
+            let dirname = upper_dir.file_name().context(format!(
+                "Failed to get dirname for {}",
+                upper_dir.display()
+            ))?;
+            let dir = parent_src.join(dirname);
+            if dir.exists() { Some(dir) } else { None }
+        }
+        None => None,
+    };
+
+    cache.insert(upper_dir.to_path_buf(), result.clone());
+    Ok(result)
+}
+
+fn has_opaque_ancestor(path: &Path, cache: &mut HashMap<PathBuf, bool>) -> bool {
+    let parent = match path.parent() {
+        Some(p) => p,
+        None => return false,
+    };
+
+    if let Some(&cached) = cache.get(parent) {
+        return cached;
+    }
+
+    let result = if let Ok(Some(details)) = FileDetails::from_path(&parent.to_path_buf()) {
+        if details.is_opaque() {
+            true
+        } else {
+            has_opaque_ancestor(parent, cache)
+        }
+    } else {
+        false
+    };
+
+    cache.insert(parent.to_path_buf(), result);
+    result
 }
 
 #[cfg(test)]
@@ -910,7 +973,8 @@ mod tests {
     #[test]
     fn test_has_opaque_ancestor() {
         let path = PathBuf::from("/tmp/test-non-existent-path/foo");
-        assert!(!has_opaque_ancestor(&path));
+        let mut cache = HashMap::new();
+        assert!(!has_opaque_ancestor(&path, &mut cache));
     }
 
     #[test]
